@@ -61,6 +61,11 @@ $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
 # Force DoubleBuffering to prevent UI flickering on updates
 $form.GetType().GetProperty("DoubleBuffered", [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic).SetValue($form, $true, $null)
 
+# Initialize CPU history list for real-time line graph
+$script:cpuHistory = [System.Collections.Generic.List[int]]::new()
+for ($i = 0; $i -lt 20; $i++) { $script:cpuHistory.Add(0) }
+$script:pulse = $false
+
 # Custom helper function to apply rounded regions to controls
 function Set-RoundedRegion {
     param($control, $radius)
@@ -183,6 +188,7 @@ function Create-Card {
     $card.Location = $location
     $card.Size = $size
     $card.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
+    $card.Tag = @{ Hover = $false }
     $parent.Controls.Add($card)
     
     # Set rounded shape
@@ -191,7 +197,8 @@ function Create-Card {
     # Draw nice border border lines on Paint
     $card.add_Paint({
         param($sender, $e)
-        $pen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml('#1E293B'), 1.5)
+        $borderColor = if ($card.Tag.Hover) { '#3B82F6' } else { '#1E293B' }
+        $pen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml($borderColor), 1.5)
         $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         
         $path = New-Object System.Drawing.Drawing2D.GraphicsPath
@@ -207,8 +214,31 @@ function Create-Card {
         $path.CloseAllFigures()
         
         $e.Graphics.DrawPath($pen, $path)
+        $pen.Dispose()
+        $path.Dispose()
     })
     return $card
+}
+
+function Register-CardHover {
+    param($card)
+    $hoverEnter = {
+        $card.Tag.Hover = $true
+        $card.Invalidate()
+    }
+    $hoverLeave = {
+        $clientPos = $card.PointToClient([System.Windows.Forms.Cursor]::Position)
+        if (-not $card.ClientRectangle.Contains($clientPos)) {
+            $card.Tag.Hover = $false
+            $card.Invalidate()
+        }
+    }
+    $card.add_MouseEnter($hoverEnter)
+    $card.add_MouseLeave($hoverLeave)
+    foreach ($ctrl in $card.Controls) {
+        $ctrl.add_MouseEnter($hoverEnter)
+        $ctrl.add_MouseLeave($hoverLeave)
+    }
 }
 
 # Left Container Panel
@@ -217,93 +247,158 @@ $leftContainer.Size = New-Object System.Drawing.Size(260, 390)
 $leftContainer.Location = New-Object System.Drawing.Point(18, 56)
 $form.Controls.Add($leftContainer)
 
-# -- CARD 1: RAM --
+# -- CARD 1: RAM (Donut Chart) --
 $ramCard = Create-Card $leftContainer (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(260, 105))
 
 $ramTitle = New-Object System.Windows.Forms.Label
-$ramTitle.Text = "BELLEK (RAM) KULLANIMI"
+$ramTitle.Text = "BELLEK (RAM) DURUMU"
 $ramTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
 $ramTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $ramTitle.Location = New-Object System.Drawing.Point(12, 10)
 $ramTitle.AutoSize = $true
 $ramCard.Controls.Add($ramTitle)
 
-# Track
-$ramTrack = New-Object System.Windows.Forms.Panel
-$ramTrack.Size = New-Object System.Drawing.Size(236, 10)
-$ramTrack.Location = New-Object System.Drawing.Point(12, 32)
-$ramTrack.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
-$ramCard.Controls.Add($ramTrack)
-Set-RoundedRegion $ramTrack 6
-
-# Value Bar
-$ramVal = New-Object System.Windows.Forms.Panel
-$ramVal.Size = New-Object System.Drawing.Size(0, 10)
-$ramVal.Location = New-Object System.Drawing.Point(0, 0)
-$ramVal.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
-$ramTrack.Controls.Add($ramVal)
-
-$ramPercentLabel = New-Object System.Windows.Forms.Label
-$ramPercentLabel.Text = "0%"
-$ramPercentLabel.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
-$ramPercentLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
-$ramPercentLabel.Location = New-Object System.Drawing.Point(10, 50)
-$ramPercentLabel.AutoSize = $true
-$ramCard.Controls.Add($ramPercentLabel)
+$ramDescLabel = New-Object System.Windows.Forms.Label
+$ramDescLabel.Text = "Sistem bellek dolulugu ve kullanim detaylari."
+$ramDescLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Regular)
+$ramDescLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$ramDescLabel.Location = New-Object System.Drawing.Point(12, 30)
+$ramDescLabel.Size = New-Object System.Drawing.Size(145, 30)
+$ramCard.Controls.Add($ramDescLabel)
 
 $ramDetailsLabel = New-Object System.Windows.Forms.Label
 $ramDetailsLabel.Text = "0.0 GB / 0.0 GB"
-$ramDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Regular)
-$ramDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$ramDetailsLabel.Location = New-Object System.Drawing.Point(120, 58)
-$ramDetailsLabel.Size = New-Object System.Drawing.Size(128, 20)
-$ramDetailsLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$ramDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$ramDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
+$ramDetailsLabel.Location = New-Object System.Drawing.Point(12, 65)
+$ramDetailsLabel.Size = New-Object System.Drawing.Size(145, 20)
 $ramCard.Controls.Add($ramDetailsLabel)
 
+# Donut Chart centered label placed over the circle
+$ramPercentLabel = New-Object System.Windows.Forms.Label
+$ramPercentLabel.Text = "0%"
+$ramPercentLabel.Font = New-Object System.Drawing.Font("Segoe UI", 11.5, [System.Drawing.FontStyle]::Bold)
+$ramPercentLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
+$ramPercentLabel.BackColor = [System.Drawing.Color]::Transparent
+$ramPercentLabel.Location = New-Object System.Drawing.Point(165, 15)
+$ramPercentLabel.Size = New-Object System.Drawing.Size(75, 75)
+$ramPercentLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+$ramCard.Controls.Add($ramPercentLabel)
 
-# -- CARD 2: CPU --
+# Donut Chart Custom Draw on Card Paint
+$ramCard.add_Paint({
+    param($sender, $e)
+    $g = $e.Graphics
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    
+    # Circle bounds
+    $rect = New-Object System.Drawing.Rectangle(165, 15, 75, 75)
+    
+    # Draw dark background track
+    $trackPen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml('#0B0F19'), 7)
+    $g.DrawEllipse($trackPen, $rect)
+    
+    # Draw arc
+    $sweepAngle = [float](360 * ([float]($ramPercentLabel.Text.Replace('%', '')) / 100))
+    if ($sweepAngle -gt 360) { $sweepAngle = 360 }
+    if ($sweepAngle -gt 0) {
+        $color1 = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6') # Blue
+        $color2 = [System.Drawing.ColorTranslator]::FromHtml('#EC4899') # Pink
+        $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, $color1, $color2, 45.0)
+        $valuePen = New-Object System.Drawing.Pen($brush, 7)
+        $valuePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $valuePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $g.DrawArc($valuePen, $rect, -90, $sweepAngle)
+        $valuePen.Dispose()
+        $brush.Dispose()
+    }
+    
+    $trackPen.Dispose()
+})
+Register-CardHover $ramCard
+
+# -- CARD 2: CPU (Real-Time Line Graph) --
 $cpuCard = Create-Card $leftContainer (New-Object System.Drawing.Point(0, 120)) (New-Object System.Drawing.Size(260, 105))
 
 $cpuTitle = New-Object System.Windows.Forms.Label
-$cpuTitle.Text = "ISLEMCI (CPU) KULLANIMI"
+$cpuTitle.Text = "ISLEMCI (CPU) DALGASI"
 $cpuTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
 $cpuTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $cpuTitle.Location = New-Object System.Drawing.Point(12, 10)
 $cpuTitle.AutoSize = $true
 $cpuCard.Controls.Add($cpuTitle)
 
-# Track
-$cpuTrack = New-Object System.Windows.Forms.Panel
-$cpuTrack.Size = New-Object System.Drawing.Size(236, 10)
-$cpuTrack.Location = New-Object System.Drawing.Point(12, 32)
-$cpuTrack.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
-$cpuCard.Controls.Add($cpuTrack)
-Set-RoundedRegion $cpuTrack 6
-
-# Value Bar
-$cpuVal = New-Object System.Windows.Forms.Panel
-$cpuVal.Size = New-Object System.Drawing.Size(0, 10)
-$cpuVal.Location = New-Object System.Drawing.Point(0, 0)
-$cpuVal.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#8B5CF6')
-$cpuTrack.Controls.Add($cpuVal)
-
 $cpuPercentLabel = New-Object System.Windows.Forms.Label
 $cpuPercentLabel.Text = "0%"
 $cpuPercentLabel.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
-$cpuPercentLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
-$cpuPercentLabel.Location = New-Object System.Drawing.Point(10, 50)
+$cpuPercentLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#8B5CF6')
+$cpuPercentLabel.Location = New-Object System.Drawing.Point(10, 32)
 $cpuPercentLabel.AutoSize = $true
 $cpuCard.Controls.Add($cpuPercentLabel)
 
 $cpuDetailsLabel = New-Object System.Windows.Forms.Label
-$cpuDetailsLabel.Text = "Anlik CPU"
-$cpuDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Regular)
-$cpuDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$cpuDetailsLabel.Location = New-Object System.Drawing.Point(120, 58)
-$cpuDetailsLabel.Size = New-Object System.Drawing.Size(128, 20)
-$cpuDetailsLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$cpuDetailsLabel.Text = "Islemci Anlik Yuk"
+$cpuDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Regular)
+$cpuDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$cpuDetailsLabel.Location = New-Object System.Drawing.Point(12, 65)
+$cpuDetailsLabel.Size = New-Object System.Drawing.Size(85, 30)
 $cpuCard.Controls.Add($cpuDetailsLabel)
 
+# Line Graph Drawing on Card Paint
+$cpuCard.add_Paint({
+    param($sender, $e)
+    $g = $e.Graphics
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    
+    # Graph Area: X=110, Y=30, Width=135, Height=55
+    $gridPen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml('#0B0F19'), 1)
+    
+    # Horizontal grid lines
+    $g.DrawLine($gridPen, 110, 48, 245, 48)
+    $g.DrawLine($gridPen, 110, 66, 245, 66)
+    
+    # Draw graph filled area and line
+    if ($script:cpuHistory.Count -gt 1) {
+        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $stepX = 135 / 19
+        
+        $points = New-Object System.Collections.Generic.List[System.Drawing.PointF]
+        for ($i = 0; $i -lt $script:cpuHistory.Count; $i++) {
+            $px = 110 + ($i * $stepX)
+            $py = 85 - ($script:cpuHistory[$i] / 100 * 50)
+            $points.Add((New-Object System.Drawing.PointF($px, $py)))
+        }
+        
+        $firstX = 110
+        $lastX = 110 + (($script:cpuHistory.Count - 1) * $stepX)
+        $points.Add((New-Object System.Drawing.PointF($lastX, 85)))
+        $points.Add((New-Object System.Drawing.PointF($firstX, 85)))
+        
+        $path.AddLines($points.ToArray())
+        $path.CloseAllFigures()
+        
+        $gradRect = New-Object System.Drawing.Rectangle(110, 35, 135, 50)
+        $colorTop = [System.Drawing.Color]::FromArgb(80, 139, 92, 246)
+        $colorBottom = [System.Drawing.Color]::FromArgb(0, 139, 92, 246)
+        $fillBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($gradRect, $colorTop, $colorBottom, 90.0)
+        $g.FillPath($fillBrush, $path)
+        
+        $graphPen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml('#8B5CF6'), 2)
+        for ($i = 0; $i -lt ($script:cpuHistory.Count - 1); $i++) {
+            $x1 = 110 + ($i * $stepX)
+            $y1 = 85 - ($script:cpuHistory[$i] / 100 * 50)
+            $x2 = 110 + (($i + 1) * $stepX)
+            $y2 = 85 - ($script:cpuHistory[$i+1] / 100 * 50)
+            $g.DrawLine($graphPen, $x1, $y1, $x2, $y2)
+        }
+        
+        $graphPen.Dispose()
+        $fillBrush.Dispose()
+        $path.Dispose()
+    }
+    $gridPen.Dispose()
+})
+Register-CardHover $cpuCard
 
 # -- CARD 3: SYSTEM INFO --
 $sysCard = Create-Card $leftContainer (New-Object System.Drawing.Point(0, 240)) (New-Object System.Drawing.Size(260, 135))
@@ -370,6 +465,8 @@ $lblJunkVal.Size = New-Object System.Drawing.Size(128, 20)
 $lblJunkVal.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $sysCard.Controls.Add($lblJunkVal)
 
+Register-CardHover $sysCard
+
 
 # Right Side Container Panel
 $rightContainer = New-Object System.Windows.Forms.Panel
@@ -395,21 +492,74 @@ $headerSub.Location = New-Object System.Drawing.Point(0, 26)
 $headerSub.Size = New-Object System.Drawing.Size(368, 36)
 $rightContainer.Controls.Add($headerSub)
 
-# Action button: One-Click System Maintenance
+# Action button: One-Click System Maintenance (Custom Gradient Paint)
 $btnOneClick = New-Object System.Windows.Forms.Button
 $btnOneClick.Size = New-Object System.Drawing.Size(368, 46)
 $btnOneClick.Location = New-Object System.Drawing.Point(0, 68)
 $btnOneClick.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnOneClick.FlatAppearance.BorderSize = 0
-$btnOneClick.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#7C3AED')
-$btnOneClick.ForeColor = [System.Drawing.Color]::White
-$btnOneClick.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $btnOneClick.Text = "Tek Tikla Sistem Bakimi Yap"
+$btnOneClick.Font = New-Object System.Drawing.Font("Segoe UI", 10.5, [System.Drawing.FontStyle]::Bold)
 $btnOneClick.Cursor = [System.Windows.Forms.Cursors]::Hand
-$btnOneClick.add_MouseEnter({ if ($btnOneClick.Enabled) { $btnOneClick.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#8B5CF6') } })
-$btnOneClick.add_MouseLeave({ if ($btnOneClick.Enabled) { $btnOneClick.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#7C3AED') } })
 $rightContainer.Controls.Add($btnOneClick)
 Set-RoundedRegion $btnOneClick 8
+
+$btnOneClick.add_MouseEnter({ $btnOneClick.Invalidate() })
+$btnOneClick.add_MouseLeave({ $btnOneClick.Invalidate() })
+$btnOneClick.add_MouseDown({ $btnOneClick.Invalidate() })
+$btnOneClick.add_MouseUp({ $btnOneClick.Invalidate() })
+
+$btnOneClick.add_Paint({
+    param($sender, $e)
+    $g = $e.Graphics
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    
+    # Gradient Colors
+    $color1 = [System.Drawing.ColorTranslator]::FromHtml('#7C3AED')
+    $color2 = [System.Drawing.ColorTranslator]::FromHtml('#EC4899')
+    
+    if (-not $btnOneClick.Enabled) {
+        $color1 = [System.Drawing.ColorTranslator]::FromHtml('#3B1D5A')
+        $color2 = [System.Drawing.ColorTranslator]::FromHtml('#5B1D45')
+    } elseif ($btnOneClick.Capture -and $btnOneClick.ClientRectangle.Contains($btnOneClick.PointToClient([System.Windows.Forms.Cursor]::Position))) {
+        # Active
+        $color1 = [System.Drawing.ColorTranslator]::FromHtml('#6D28D9')
+        $color2 = [System.Drawing.ColorTranslator]::FromHtml('#DB2777')
+    } elseif ($btnOneClick.ClientRectangle.Contains($btnOneClick.PointToClient([System.Windows.Forms.Cursor]::Position))) {
+        # Hover
+        $color1 = [System.Drawing.ColorTranslator]::FromHtml('#8B5CF6')
+        $color2 = [System.Drawing.ColorTranslator]::FromHtml('#F472B6')
+    }
+    
+    $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($btnOneClick.ClientRectangle, $color1, $color2, 0.0)
+    
+    # Path
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $radius = 8
+    $arcRect = New-Object System.Drawing.Rectangle(0, 0, $radius, $radius)
+    $path.AddArc($arcRect, 180, 90)
+    $arcRect.X = $btnOneClick.Width - $radius - 1
+    $path.AddArc($arcRect, 270, 90)
+    $arcRect.Y = $btnOneClick.Height - $radius - 1
+    $path.AddArc($arcRect, 0, 90)
+    $arcRect.X = 0
+    $path.AddArc($arcRect, 90, 90)
+    $path.CloseAllFigures()
+    
+    $g.FillPath($brush, $path)
+    
+    # Draw Text
+    $textBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+    $sf = New-Object System.Windows.Forms.StringFormat
+    $sf.Alignment = [System.Windows.Forms.StringAlignment]::Center
+    $sf.LineAlignment = [System.Windows.Forms.StringAlignment]::Center
+    $g.DrawString($btnOneClick.Text, $btnOneClick.Font, $textBrush, (New-Object System.Drawing.RectangleF(0, 0, $btnOneClick.Width, $btnOneClick.Height)), $sf)
+    
+    $brush.Dispose()
+    $path.Dispose()
+    $textBrush.Dispose()
+    $sf.Dispose()
+})
 
 # Console terminal logging panel
 $logPanel = New-Object System.Windows.Forms.Panel
@@ -458,15 +608,60 @@ $lblStatus.Location = New-Object System.Drawing.Point(0, 352)
 $lblStatus.Size = New-Object System.Drawing.Size(200, 20)
 $rightContainer.Controls.Add($lblStatus)
 
-# Auto Boost Checkbox
-$chkAuto = New-Object System.Windows.Forms.CheckBox
-$chkAuto.Text = "Oto RAM Bosalt"
-$chkAuto.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$chkAuto.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$chkAuto.Location = New-Object System.Drawing.Point(198, 350)
-$chkAuto.Size = New-Object System.Drawing.Size(105, 20)
-$chkAuto.Cursor = [System.Windows.Forms.Cursors]::Hand
-$rightContainer.Controls.Add($chkAuto)
+# Auto Boost Switch & Labels
+$script:autoBoostEnabled = $false
+
+$lblAuto = New-Object System.Windows.Forms.Label
+$lblAuto.Text = "Oto RAM Bosalt:"
+$lblAuto.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$lblAuto.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
+$lblAuto.Location = New-Object System.Drawing.Point(90, 350)
+$lblAuto.Size = New-Object System.Drawing.Size(100, 20)
+$lblAuto.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+$rightContainer.Controls.Add($lblAuto)
+
+$switchPanel = New-Object System.Windows.Forms.Panel
+$switchPanel.Size = New-Object System.Drawing.Size(36, 20)
+$switchPanel.Location = New-Object System.Drawing.Point(196, 350)
+$switchPanel.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#334155')
+$switchPanel.Cursor = [System.Windows.Forms.Cursors]::Hand
+$rightContainer.Controls.Add($switchPanel)
+Set-RoundedRegion $switchPanel 10
+
+$switchPanel.add_Paint({
+    param($sender, $e)
+    $g = $e.Graphics
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    
+    $bgBrush = if ($script:autoBoostEnabled) {
+        New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#10B981'))
+    } else {
+        New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#334155'))
+    }
+    
+    $g.FillRectangle($bgBrush, 0, 0, $switchPanel.Width, $switchPanel.Height)
+    $bgBrush.Dispose()
+    
+    $knobBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+    $knobX = if ($script:autoBoostEnabled) { 18 } else { 2 }
+    $g.FillEllipse($knobBrush, $knobX, 2, 16, 16)
+    $knobBrush.Dispose()
+})
+
+$switchPanel.add_Click({
+    $script:autoBoostEnabled = -not $script:autoBoostEnabled
+    $switchPanel.Invalidate()
+})
+
+# Auto Boost Limit Label
+$lblLimit = New-Object System.Windows.Forms.Label
+$lblLimit.Text = "Sinir:"
+$lblLimit.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$lblLimit.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
+$lblLimit.Location = New-Object System.Drawing.Point(245, 350)
+$lblLimit.Size = New-Object System.Drawing.Size(55, 20)
+$lblLimit.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+$rightContainer.Controls.Add($lblLimit)
 
 # Auto Boost Limit Dropdown
 $cmbLimit = New-Object System.Windows.Forms.ComboBox
@@ -492,16 +687,45 @@ function Write-Log {
         [string]$Type = "info"
     )
     $timestamp = Get-Date -Format "HH:mm:ss"
-    $prefix = ""
-    switch ($Type) {
-        "success" { $prefix = "[OK] " }
-        "warn"    { $prefix = "[!] " }
-        "error"   { $prefix = "[X] " }
-        default   { $prefix = "[i] " }
-    }
     
     $logAction = [Action]{
-        $logBox.AppendText("[$timestamp] $prefix$Message`n")
+        # Append Timestamp in gray color
+        $logBox.SelectionStart = $logBox.Text.Length
+        $logBox.SelectionLength = 0
+        $logBox.SelectionColor = [System.Drawing.ColorTranslator]::FromHtml('#475569')
+        $logBox.AppendText("[$timestamp] ")
+        
+        # Append Prefix in specific status color
+        $prefix = ""
+        $prefixColor = '#3B82F6'
+        switch ($Type) {
+            "success" {
+                $prefix = "[OK] "
+                $prefixColor = '#10B981'
+            }
+            "warn" {
+                $prefix = "[!] "
+                $prefixColor = '#F59E0B'
+            }
+            "error" {
+                $prefix = "[X] "
+                $prefixColor = '#EF4444'
+            }
+            default {
+                $prefix = "[i] "
+                $prefixColor = '#06B6D4'
+            }
+        }
+        $logBox.SelectionStart = $logBox.Text.Length
+        $logBox.SelectionColor = [System.Drawing.ColorTranslator]::FromHtml($prefixColor)
+        $logBox.AppendText($prefix)
+        
+        # Append actual message in slate color
+        $logBox.SelectionStart = $logBox.Text.Length
+        $logBox.SelectionColor = [System.Drawing.ColorTranslator]::FromHtml('#E2E8F0')
+        $logBox.AppendText("$Message`n")
+        
+        # Scroll to bottom
         $logBox.SelectionStart = $logBox.Text.Length
         $logBox.ScrollToCaret()
     }
@@ -715,7 +939,7 @@ function Clean-Junk {
 # Bind Maintenance Button Click
 $btnOneClick.add_Click({
     $btnOneClick.Enabled = $false
-    $btnOneClick.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#4C1D95')
+    $btnOneClick.Invalidate()
     Write-Log "Tek Tikla Sistem Bakimi baslatildi..." "info"
     
     [System.Windows.Forms.Application]::DoEvents()
@@ -739,7 +963,7 @@ $btnOneClick.add_Click({
         Write-Log "Bakim sirasinda hata: $_" "error"
     } finally {
         $btnOneClick.Enabled = $true
-        $btnOneClick.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#7C3AED')
+        $btnOneClick.Invalidate()
     }
 })
 
@@ -759,29 +983,37 @@ $timer.add_Tick({
         $usedGB = [Math]::Round(($memStatus.ullTotalPhys - $memStatus.ullAvailPhys) / 1GB, 1)
         $ramLoad = $memStatus.dwMemoryLoad
 
-        $newWidth = [int]($ramTrack.Width * ($ramLoad / 100))
-        if ($newWidth -gt $ramTrack.Width) { $newWidth = $ramTrack.Width }
-        $ramVal.Width = $newWidth
         $ramPercentLabel.Text = "$ramLoad%"
         $ramDetailsLabel.Text = "$usedGB GB / $totalGB GB"
+        $ramCard.Invalidate() # Force Donut repaint
 
         # Update CPU UI
         $cpuVal = [Math]::Round($cpuCounter.NextValue())
         if ($cpuVal -gt 100) { $cpuVal = 100 }
-        $newCpuWidth = [int]($cpuTrack.Width * ($cpuVal / 100))
-        if ($newCpuWidth -gt $cpuTrack.Width) { $newCpuWidth = $cpuTrack.Width }
-        $cpuVal.Width = $newCpuWidth
         $cpuPercentLabel.Text = "$cpuVal%"
+        
+        # Shift and append to history
+        $script:cpuHistory.Add($cpuVal)
+        if ($script:cpuHistory.Count -gt 20) { $script:cpuHistory.RemoveAt(0) }
+        $cpuCard.Invalidate() # Force line graph repaint
 
         # Update System Details
         $uptime = [Win32Helper]::GetSystemUptime()
         $lblUptimeVal.Text = [string]::Format("{0}g {1}s {2}d", $uptime.Days, $uptime.Hours, $uptime.Minutes)
         $lblProcVal.Text = (Get-Process).Count.ToString()
 
+        # Pulse logo indicator
+        if ($script:pulse) {
+            $logoDot.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#059669')
+        } else {
+            $logoDot.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#10B981')
+        }
+        $script:pulse = -not $script:pulse
+
         # Check Auto-Boost
         $limitText = $cmbLimit.SelectedItem.ToString()
         $limitVal = [int]($limitText -replace '%', '')
-        if ($chkAuto.Checked -and $ramLoad -ge $limitVal) {
+        if ($script:autoBoostEnabled -and $ramLoad -ge $limitVal) {
             Write-Log "Kritik RAM seviyesi (%$limitVal+)! Otomatik temizlik yapılıyor..." "warn"
             Optimize-RAM -Silent
         }
