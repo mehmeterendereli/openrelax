@@ -182,13 +182,14 @@ $btnMin.add_Click({ $form.WindowState = [System.Windows.Forms.FormWindowState]::
 $titleBar.Controls.Add($btnMin)
 
 # 4. Helper to create rounded card panels
+$script:cardHoverStates = @{}
+
 function Create-Card {
     param($parent, $location, $size)
     $card = New-Object System.Windows.Forms.Panel
     $card.Location = $location
     $card.Size = $size
     $card.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
-    $card.Tag = @{ Hover = $false }
     $parent.Controls.Add($card)
     
     # Set rounded shape
@@ -197,7 +198,9 @@ function Create-Card {
     # Draw nice border border lines on Paint
     $card.add_Paint({
         param($sender, $e)
-        $borderColor = if ($card.Tag.Hover) { '#3B82F6' } else { '#1E293B' }
+        $cardName = $card.GetHashCode().ToString()
+        $isHovered = $script:cardHoverStates[$cardName] -eq $true
+        $borderColor = if ($isHovered) { '#3B82F6' } else { '#1E293B' }
         $pen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml($borderColor), 1.5)
         $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         
@@ -222,14 +225,17 @@ function Create-Card {
 
 function Register-CardHover {
     param($card)
+    $cardName = $card.GetHashCode().ToString()
+    $script:cardHoverStates[$cardName] = $false
+    
     $hoverEnter = {
-        $card.Tag.Hover = $true
+        $script:cardHoverStates[$cardName] = $true
         $card.Invalidate()
     }
     $hoverLeave = {
         $clientPos = $card.PointToClient([System.Windows.Forms.Cursor]::Position)
         if (-not $card.ClientRectangle.Contains($clientPos)) {
-            $card.Tag.Hover = $false
+            $script:cardHoverStates[$cardName] = $false
             $card.Invalidate()
         }
     }
@@ -548,11 +554,10 @@ $btnOneClick.add_Paint({
     
     $g.FillPath($brush, $path)
     
-    # Draw Text
     $textBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-    $sf = New-Object System.Windows.Forms.StringFormat
-    $sf.Alignment = [System.Windows.Forms.StringAlignment]::Center
-    $sf.LineAlignment = [System.Windows.Forms.StringAlignment]::Center
+    $sf = New-Object System.Drawing.StringFormat
+    $sf.Alignment = [System.Drawing.StringAlignment]::Center
+    $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
     $g.DrawString($btnOneClick.Text, $btnOneClick.Font, $textBrush, (New-Object System.Drawing.RectangleF(0, 0, $btnOneClick.Width, $btnOneClick.Height)), $sf)
     
     $brush.Dispose()
@@ -797,6 +802,41 @@ function Get-JunkPaths {
     if (Test-Path $d3dCache) {
         $paths += $d3dCache
     }
+    
+    # 1. Windows Error Reporting & Crash Dumps
+    $werArchive = "$env:PROGRAMDATA\Microsoft\Windows\WER\ReportArchive"
+    if (Test-Path $werArchive) { $paths += $werArchive }
+    $werQueue = "$env:PROGRAMDATA\Microsoft\Windows\WER\ReportQueue"
+    if (Test-Path $werQueue) { $paths += $werQueue }
+    $crashDumps = "$env:LOCALAPPDATA\CrashDumps"
+    if (Test-Path $crashDumps) { $paths += $crashDumps }
+    
+    # 2. Windows Update Download Cache
+    $wuDownload = "$env:SystemRoot\SoftwareDistribution\Download"
+    if (Test-Path $wuDownload) { $paths += $wuDownload }
+    
+    # 3. GPU Installer Residues
+    if (Test-Path "C:\NVIDIA") { $paths += "C:\NVIDIA" }
+    if (Test-Path "C:\AMD") { $paths += "C:\AMD" }
+    $nvNetService = "$env:PROGRAMDATA\NVIDIA Corporation\NetService"
+    if (Test-Path $nvNetService) { $paths += $nvNetService }
+    
+    # 4. Setup & Upgrade Logs
+    $panther = "$env:SystemRoot\Panther"
+    if (Test-Path $panther) { $paths += $panther }
+    $sysLogs = "$env:SystemRoot\Logs"
+    if (Test-Path $sysLogs) { $paths += $sysLogs }
+    
+    # 5. Prefetch Data
+    $prefetch = "$env:SystemRoot\Prefetch"
+    if (Test-Path $prefetch) { $paths += $prefetch }
+    
+    # 6. Additional GPU Shader Caches
+    $nvCache = "$env:LOCALAPPDATA\NVIDIA\DXCache"
+    if (Test-Path $nvCache) { $paths += $nvCache }
+    $amdCache = "$env:LOCALAPPDATA\AMD\DxCache"
+    if (Test-Path $amdCache) { $paths += $amdCache }
+
     return $paths
 }
 
