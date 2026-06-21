@@ -198,7 +198,7 @@ function Create-Card {
     # Draw nice border border lines on Paint
     $card.add_Paint({
         param($sender, $e)
-        $cardName = $card.GetHashCode().ToString()
+        $cardName = $sender.GetHashCode().ToString()
         $isHovered = $script:cardHoverStates[$cardName] -eq $true
         $borderColor = if ($isHovered) { '#3B82F6' } else { '#1E293B' }
         $pen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml($borderColor), 1.5)
@@ -208,9 +208,9 @@ function Create-Card {
         $radius = 16
         $arcRect = New-Object System.Drawing.Rectangle(0, 0, $radius, $radius)
         $path.AddArc($arcRect, 180, 90)
-        $arcRect.X = $card.Width - $radius - 1
+        $arcRect.X = $sender.Width - $radius - 1
         $path.AddArc($arcRect, 270, 90)
-        $arcRect.Y = $card.Height - $radius - 1
+        $arcRect.Y = $sender.Height - $radius - 1
         $path.AddArc($arcRect, 0, 90)
         $arcRect.X = 0
         $path.AddArc($arcRect, 90, 90)
@@ -231,14 +231,16 @@ function Register-CardHover {
     $hoverEnter = {
         $script:cardHoverStates[$cardName] = $true
         $card.Invalidate()
-    }
+    }.GetNewClosure()
+    
     $hoverLeave = {
         $clientPos = $card.PointToClient([System.Windows.Forms.Cursor]::Position)
         if (-not $card.ClientRectangle.Contains($clientPos)) {
             $script:cardHoverStates[$cardName] = $false
             $card.Invalidate()
         }
-    }
+    }.GetNewClosure()
+    
     $card.add_MouseEnter($hoverEnter)
     $card.add_MouseLeave($hoverLeave)
     foreach ($ctrl in $card.Controls) {
