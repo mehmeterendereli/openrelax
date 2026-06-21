@@ -182,7 +182,7 @@ $btnMin.add_Click({ $form.WindowState = [System.Windows.Forms.FormWindowState]::
 $titleBar.Controls.Add($btnMin)
 
 # 4. Helper to create rounded card panels
-$script:cardHoverStates = @{}
+$global:cardHoverStates = @{}
 
 function Create-Card {
     param($parent, $location, $size)
@@ -199,7 +199,7 @@ function Create-Card {
     $card.add_Paint({
         param($sender, $e)
         $cardName = $sender.GetHashCode().ToString()
-        $isHovered = $script:cardHoverStates[$cardName] -eq $true
+        $isHovered = $global:cardHoverStates[$cardName] -eq $true
         $borderColor = if ($isHovered) { '#3B82F6' } else { '#1E293B' }
         $pen = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml($borderColor), 1.5)
         $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
@@ -226,17 +226,17 @@ function Create-Card {
 function Register-CardHover {
     param($card)
     $cardName = $card.GetHashCode().ToString()
-    $script:cardHoverStates[$cardName] = $false
+    $global:cardHoverStates[$cardName] = $false
     
     $hoverEnter = {
-        $script:cardHoverStates[$cardName] = $true
+        $global:cardHoverStates[$cardName] = $true
         $card.Invalidate()
     }.GetNewClosure()
     
     $hoverLeave = {
         $clientPos = $card.PointToClient([System.Windows.Forms.Cursor]::Position)
         if (-not $card.ClientRectangle.Contains($clientPos)) {
-            $script:cardHoverStates[$cardName] = $false
+            $global:cardHoverStates[$cardName] = $false
             $card.Invalidate()
         }
     }.GetNewClosure()
