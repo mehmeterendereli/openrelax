@@ -438,6 +438,40 @@ function Remove-JunkPaths {
     return @{ Bytes = $bytes; Count = $count }
 }
 
+function Invoke-WindowsUpdateCacheCleanup {
+    param($Paths, [bool]$IsAdmin)
+
+    if (-not $IsAdmin) {
+        throw 'Windows Update cache cleanup requires administrator privileges.'
+    }
+
+    $restartServices = @()
+    $restartErrors = @()
+    try {
+        foreach ($name in 'wuauserv', 'bits') {
+            $service = Get-Service -Name $name -ErrorAction Stop
+            if ($service.Status -eq 'Running') {
+                Stop-Service -Name $name -Force -ErrorAction Stop
+                $restartServices += $name
+            }
+        }
+
+        return Remove-JunkPaths -Paths $Paths -IsAdmin:$IsAdmin
+    } finally {
+        foreach ($name in $restartServices) {
+            try {
+                Start-Service -Name $name -ErrorAction Stop
+            } catch {
+                $restartErrors += "$name`: $($_.Exception.Message)"
+            }
+        }
+
+        if ($restartErrors.Count -gt 0) {
+            throw "Windows Update service state could not be restored: $($restartErrors -join '; ')"
+        }
+    }
+}
+
 # Trims process working sets via EmptyWorkingSet. Skips critical system
 # processes; the reclaimed number is transient by nature (pages return on use).
 function Invoke-RamTrim {
@@ -469,7 +503,7 @@ function Invoke-RamTrim {
 # Serialized engine source, injected into every background runspace so the
 # worker and the UI share a single implementation.
 $script:EngineCode = ''
-foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Invoke-RamTrim') {
+foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Invoke-WindowsUpdateCacheCleanup', 'Invoke-RamTrim') {
     $script:EngineCode += "function $fnName {`n" + (Get-Command $fnName).Definition + "`n}`n"
 }
 #endregion
@@ -526,22 +560,13 @@ try {
         }
         if ($cat.Key -eq 'wu') {
             if (-not $Opt.IsAdmin) { continue }
-            $svcStopped = $false
             try {
-                Stop-Service -Name wuauserv, bits -Force -ErrorAction Stop
-                $svcStopped = $true
                 $Sync.Log.Enqueue(@{ Key = 'logWuStopped'; Type = 'info' })
-            } catch {}
-            try {
-                $r = Remove-JunkPaths -Paths $cat.Paths -IsAdmin:$Opt.IsAdmin
+                $r = Invoke-WindowsUpdateCacheCleanup -Paths $cat.Paths -IsAdmin:$Opt.IsAdmin
                 $deletedBytes += $r.Bytes; $deletedCount += $r.Count
-            } finally {
-                if ($svcStopped) {
-                    try {
-                        Start-Service -Name wuauserv, bits -ErrorAction SilentlyContinue
-                        $Sync.Log.Enqueue(@{ Key = 'logWuStarted'; Type = 'info' })
-                    } catch {}
-                }
+                $Sync.Log.Enqueue(@{ Key = 'logWuStarted'; Type = 'info' })
+            } catch {
+                $Sync.Log.Enqueue(@{ Text = "Windows Update cleanup skipped: $($_.Exception.Message)"; Type = 'error' })
             }
             continue
         }
@@ -645,14 +670,10 @@ if ($AutoClean) {
         }
         if ($cat.Key -eq 'wu') {
             if (-not $script:IsAdmin) { continue }
-            $svcStopped = $false
-            try { Stop-Service -Name wuauserv, bits -Force -ErrorAction Stop; $svcStopped = $true } catch {}
             try {
-                $r = Remove-JunkPaths -Paths $cat.Paths -IsAdmin:$script:IsAdmin
+                $r = Invoke-WindowsUpdateCacheCleanup -Paths $cat.Paths -IsAdmin:$script:IsAdmin
                 $bytes += $r.Bytes; $count += $r.Count
-            } finally {
-                if ($svcStopped) { try { Start-Service -Name wuauserv, bits -ErrorAction SilentlyContinue } catch {} }
-            }
+            } catch {}
             continue
         }
         $r = Remove-JunkPaths -Paths $cat.Paths -IsAdmin:$script:IsAdmin

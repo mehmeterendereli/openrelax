@@ -57,11 +57,11 @@ function Assert-FileFingerprintUnchanged {
 Write-Host '== PowerShell parser check =='
 $tokens = $null
 $parseErrors = $null
-[System.Management.Automation.Language.Parser]::ParseFile(
+$syntaxTree = [System.Management.Automation.Language.Parser]::ParseFile(
     $appPath,
     [ref]$tokens,
     [ref]$parseErrors
-) | Out-Null
+)
 
 if ($parseErrors.Count -gt 0) {
     foreach ($parseError in $parseErrors) {
@@ -71,6 +71,93 @@ if ($parseErrors.Count -gt 0) {
 }
 
 Write-Host "Parser OK: $($tokens.Count) tokens"
+
+Write-Host '== Windows Update service-state contract =='
+$updateCleanupAst = $syntaxTree.Find(
+    {
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-WindowsUpdateCacheCleanup'
+    },
+    $true
+)
+
+if (-not $updateCleanupAst) {
+    throw 'Invoke-WindowsUpdateCacheCleanup was not found.'
+}
+
+$contractSource = $updateCleanupAst.Extent.Text + @'
+
+function Invoke-ContractScenario {
+    param([switch]$FailBitsStop)
+
+    $script:serviceStates = @{ wuauserv = 'Running'; bits = 'Stopped' }
+    if ($FailBitsStop) { $script:serviceStates.bits = 'Running' }
+    $script:stoppedServices = @()
+    $script:startedServices = @()
+    $script:removeCalls = 0
+    $result = $null
+
+    function Get-Service {
+        param([string]$Name, $ErrorAction)
+        return [pscustomobject]@{ Name = $Name; Status = $script:serviceStates[$Name] }
+    }
+    function Stop-Service {
+        param([string]$Name, [switch]$Force, $ErrorAction)
+        if ($FailBitsStop -and $Name -eq 'bits') { throw 'simulated BITS stop failure' }
+        $script:serviceStates[$Name] = 'Stopped'
+        $script:stoppedServices += $Name
+    }
+    function Start-Service {
+        param([string]$Name, $ErrorAction)
+        $script:serviceStates[$Name] = 'Running'
+        $script:startedServices += $Name
+    }
+    function Remove-JunkPaths {
+        param($Paths, [bool]$IsAdmin)
+        $script:removeCalls++
+        return @{ Bytes = 12; Count = 1 }
+    }
+
+    $threw = $false
+    try {
+        $result = Invoke-WindowsUpdateCacheCleanup -Paths @(@{ Path = 'unused'; Admin = $true }) -IsAdmin:$true
+    } catch {
+        $threw = $true
+    }
+
+    return [pscustomobject]@{
+        Threw = $threw
+        Result = $result
+        States = $script:serviceStates.Clone()
+        Stopped = @($script:stoppedServices)
+        Started = @($script:startedServices)
+        RemoveCalls = $script:removeCalls
+    }
+}
+
+$normal = Invoke-ContractScenario
+if ($normal.Threw -or $normal.RemoveCalls -ne 1 -or $normal.Result.Count -ne 1) {
+    throw 'Windows Update cleanup did not execute in the successful contract scenario.'
+}
+if (($normal.Stopped -join ',') -ne 'wuauserv' -or ($normal.Started -join ',') -ne 'wuauserv') {
+    throw 'Windows Update cleanup did not preserve an initially stopped BITS service.'
+}
+if ($normal.States.wuauserv -ne 'Running' -or $normal.States.bits -ne 'Stopped') {
+    throw 'Windows Update cleanup did not restore the original service states.'
+}
+
+$failure = Invoke-ContractScenario -FailBitsStop
+if (-not $failure.Threw -or $failure.RemoveCalls -ne 0) {
+    throw 'Windows Update cleanup continued after a service-stop failure.'
+}
+if ($failure.States.wuauserv -ne 'Running' -or $failure.States.bits -ne 'Running') {
+    throw 'Windows Update cleanup failed to restore service state after a partial stop.'
+}
+'@
+
+& ([scriptblock]::Create($contractSource))
+Write-Host 'Windows Update contract OK: cleanup requires stopped services and restores prior state.'
 Write-Host '== Read-only application self-test =='
 
 $settingsPath = Join-Path $env:APPDATA 'OpenRelax\settings.json'

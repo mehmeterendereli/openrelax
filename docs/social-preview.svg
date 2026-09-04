@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">OpenRelax PC Care</title>
+  <desc id="description">Windows maintenance from inspectable PowerShell source with explicit safety boundaries.</desc>
+  <rect width="1280" height="640" fill="#f2f0ea"/>
+  <rect x="0" y="0" width="18" height="640" fill="#a64b2a"/>
+  <g transform="translate(92 118)">
+    <rect width="146" height="146" rx="28" fill="#17232d"/>
+    <path d="M42 73a31 31 0 1 1 16 27" fill="none" stroke="#f2f0ea" stroke-width="11" stroke-linecap="round"/>
+    <path d="M42 73V46m0 27h27" fill="none" stroke="#a64b2a" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="92" y="348" fill="#17232d" font-family="Segoe UI, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="1">OPENRELAX</text>
+  <text x="96" y="404" fill="#52606a" font-family="Segoe UI, Arial, sans-serif" font-size="26" font-weight="600" letter-spacing="4">PC CARE</text>
+  <line x1="96" y1="452" x2="1184" y2="452" stroke="#c9c5bc" stroke-width="2"/>
+  <text x="96" y="512" fill="#17232d" font-family="Segoe UI, Arial, sans-serif" font-size="31" font-weight="600">Windows maintenance from inspectable PowerShell source</text>
+  <text x="96" y="561" fill="#52606a" font-family="Segoe UI, Arial, sans-serif" font-size="22">READ-ONLY SELF-TEST  •  EXPLICIT SAFETY BOUNDARIES  •  MIT</text>
+</svg>

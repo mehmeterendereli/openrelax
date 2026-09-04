@@ -2,9 +2,11 @@
 
 [![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
 
+[Open-source portfolio](https://www.mehmeterendereli.com/en/open-source) · [Maintainer profile](https://github.com/mehmeterendereli)
+
 A portable Windows maintenance utility built with **PowerShell and Windows Forms**. It runs from source, requires no installer, and keeps its cleanup targets and safety boundaries visible in one inspectable script.
 
-**Current status:** v2.0 focused utility · Windows only · MIT licensed · automated parser/self-test verification · no signed binary release yet
+**Current status:** source version 2.0 · focused Windows utility · MIT licensed · automated parser/self-test verification · no signed binary release
 
 > OpenRelax is not a registry “optimizer” and it does not promise permanent RAM gains. It cleans regenerable files, trims eligible process working sets, and reports what happened.
 
@@ -78,7 +80,8 @@ Every push and pull request targeting `main` runs on a GitHub-hosted Windows mac
 1. Parses the complete `openrelax.ps1` file with PowerShell's language parser and fails on any syntax error.
 2. Starts the real application in a separate Windows PowerShell process with `-SelfTest`.
 3. Requires a zero exit code, the versioned self-test banner and the final `Self-test OK` marker.
-4. Fingerprints `%APPDATA%\OpenRelax\settings.json` and `autoclean.log` before and after execution, failing if the supposedly read-only path creates, removes or modifies either file.
+4. Exercises the Windows Update service-state contract without deleting files: only services that were running may be stopped, cleanup is blocked after a stop failure, and prior states must be restored.
+5. Fingerprints `%APPDATA%\OpenRelax\settings.json` and `autoclean.log` before and after execution, failing if the supposedly read-only path creates, removes or modifies either file.
 
 Run the same entrypoint locally:
 
@@ -86,7 +89,7 @@ Run the same entrypoint locally:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
 ```
 
-This proves that the checked-in script parses, its non-destructive scan path executes successfully on Windows and its persistent settings/log state stays unchanged. It does **not** replace isolated unit tests for each cleanup function or destructive-mode testing on every Windows configuration.
+This proves that the checked-in script parses, its non-destructive scan path executes successfully on Windows, its Windows Update service-state guard behaves deterministically, and its persistent settings/log state stays unchanged. It does **not** replace comprehensive unit tests for every cleanup function or destructive-mode testing on every Windows configuration.
 
 ## Safety contract
 
@@ -127,6 +130,7 @@ openrelax.ps1                  Application, UI, engine and operating modes
 launch.bat                     No-install Windows launcher
 tests/verify.ps1               Parser + real read-only self-test entrypoint
 .github/workflows/verify.yml   Windows CI definition
+docs/social-preview.png        Repository social-preview upload asset
 README.md                      Behaviour, safety contract and usage
 PLAN.md                        Original implementation plan and design notes
 LICENSE                        MIT license text
@@ -138,7 +142,7 @@ Keeping the application in one script makes it easy to audit and copy. It also c
 
 - Windows and Windows Forms only
 - Distributed as source; there is currently no signed installer or signed executable release
-- Windows CI covers parser correctness and the real read-only self-test, but there is no isolated unit-test suite yet
+- Windows CI covers parser correctness, the real read-only self-test and an isolated Windows Update service-state contract; broader cleanup-function unit coverage remains limited
 - The application is a single large PowerShell script, which keeps deployment simple but reduces modular testability
 - Cleanup results vary by permissions, active applications and machine configuration
 - Working-set trimming should not be interpreted as a permanent performance or memory-capacity increase
