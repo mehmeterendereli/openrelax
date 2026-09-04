@@ -16,7 +16,7 @@ A portable Windows maintenance utility built with **PowerShell and Windows Forms
 | **Safety model** | Administrator-only targets are marked and skipped without elevation; locked files are skipped; sensitive profile data and diagnostic folders are excluded |
 | **Execution** | Cleanup, scanning and disk analysis run in background PowerShell runspaces so the WinForms UI remains responsive |
 | **Operating modes** | Interactive GUI, tray/minimized startup, scheduled headless cleanup and read-only `-SelfTest` |
-| **Verification** | Windows CI parses the complete script and runs the real read-only application self-test on every push and pull request |
+| **Verification** | Windows CI parses the complete script, runs the real `-SelfTest` path and proves that settings and AutoClean log state remain unchanged |
 | **Persistence** | Settings and aggregate usage statistics are stored in `%APPDATA%\OpenRelax\settings.json` |
 
 ## Execution map
@@ -78,6 +78,7 @@ Every push and pull request targeting `main` runs on a GitHub-hosted Windows mac
 1. Parses the complete `openrelax.ps1` file with PowerShell's language parser and fails on any syntax error.
 2. Starts the real application in a separate Windows PowerShell process with `-SelfTest`.
 3. Requires a zero exit code, the versioned self-test banner and the final `Self-test OK` marker.
+4. Fingerprints `%APPDATA%\OpenRelax\settings.json` and `autoclean.log` before and after execution, failing if the supposedly read-only path creates, removes or modifies either file.
 
 Run the same entrypoint locally:
 
@@ -85,7 +86,7 @@ Run the same entrypoint locally:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
 ```
 
-This proves that the checked-in script parses and that its non-destructive scan path executes successfully on Windows. It does **not** replace isolated unit tests for each cleanup function or destructive-mode testing on every Windows configuration.
+This proves that the checked-in script parses, its non-destructive scan path executes successfully on Windows and its persistent settings/log state stays unchanged. It does **not** replace isolated unit tests for each cleanup function or destructive-mode testing on every Windows configuration.
 
 ## Safety contract
 
@@ -159,6 +160,8 @@ Aynı parser ve salt-okunur uygulama kontrolünü yerelde çalıştırmak için:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
 ```
+
+CI, `SelfTest` çalışırken ayar dosyası ile AutoClean günlüğünün oluşturulmadığını, silinmediğini veya değiştirilmediğini de doğrular.
 
 Araç; Prefetch klasörünü, Windows tanılama günlüklerini, tarayıcı geçmişini, yer imlerini ve kullanıcı profil verilerini temizlemez. Windows Update temizliği varsayılan olarak kapalıdır ve yalnızca yönetici yetkisiyle çalışır.
 
