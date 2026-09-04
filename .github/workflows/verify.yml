@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   parser-and-self-test:
-    name: Parser + read-only self-test
+    name: Parser + safety contracts
     runs-on: windows-latest
     timeout-minutes: 10
 
@@ -26,6 +26,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Verify PowerShell source and application self-test
+      - name: Verify parser, service-state guard and read-only self-test
         shell: powershell
         run: .\tests\verify.ps1
