@@ -1,59 +1,140 @@
-# OpenRelax PC Care 🚀
+# OpenRelax PC Care
 
-**OpenRelax** is a lightweight, safe, and beautiful open-source Windows system optimization utility built with PowerShell and Windows Forms — a single script, no installation. It reclaims RAM, cleans application/browser caches, and stays out of your way in the system tray.
+A portable Windows maintenance utility built with **PowerShell and Windows Forms**. It runs from source, requires no installer, and keeps its cleanup targets and safety boundaries visible in one inspectable script.
 
----
+**Current status:** v2.0 focused utility · Windows only · MIT licensed · no signed binary release yet
 
-## Özellikler / Features
+> OpenRelax is not a registry “optimizer” and it does not promise permanent RAM gains. It cleans regenerable files, trims eligible process working sets, and reports what happened.
 
-### 🇹🇷 Türkçe
-- **Tek Tıkla Sistem Bakımı:** Seçili kategorilerdeki tüm temizlik ve RAM optimizasyonu tek butonla, arka planda çalışır — arayüz asla donmaz.
-- **Seçilebilir Temizlik Kategorileri:** Geçici dosyalar, tarayıcı önbellekleri (Chrome, Edge, Brave, Opera/Opera GX, Firefox — tüm profiller), Discord, GPU shader önbellekleri, Windows hata raporları (WER), Windows Update önbelleği, GPU kurulum kalıntıları ve Geri Dönüşüm Kutusu. Her kategori Ayarlar sekmesinden açılıp kapatılabilir.
-- **Güvenli RAM Optimizasyonu:** Native Windows API'leri ile süreçlerin kullanmadığı fiziksel bellek geri kazanılır; kritik sistem süreçleri asla dokunulmaz.
-- **Akıllı Oto RAM Boşaltma:** RAM belirlediğiniz eşiği aşınca otomatik temizlik — 5 dakikalık bekleme süresi ve histerezis ile sistemi yormadan.
-- **Sistem Tepsisi:** Pencereyi kapatınca uygulama tepside yaşamaya devam eder (ayarlardan kapatılabilir); tepsiden tek tıkla bakım yapılabilir.
-- **Windows ile Başlatma & Haftalık Otomatik Temizlik:** Ayarlardan tek tikle etkinleştirilir.
-- **Disk Analizi:** Kullanıcı profilinizdeki en büyük 10 klasörü gösterir (salt okunur).
-- **İstatistikler:** Bugüne kadar toplam temizlenen alan ve bakım sayısı kaydedilir.
-- **TR / EN Dil Desteği** ve gerçek zamanlı CPU/RAM/uptime monitörü.
+## What you can inspect
 
-### 🇺🇸 English
-- **One-Click Maintenance:** All cleanup and RAM optimization runs on a background thread — the UI never freezes.
-- **Selectable Cleanup Categories:** Temp files, browser caches (Chrome, Edge, Brave, Opera/Opera GX, Firefox — all profiles), Discord, GPU shader caches, Windows Error Reporting, Windows Update cache, GPU installer leftovers, and the Recycle Bin. Toggle each category in Settings.
-- **Safe RAM Optimization:** Uses native Windows APIs to trim idle working sets; critical system processes are never touched.
-- **Smart Auto-Boost:** Automatically trims RAM when usage crosses your threshold — with a 5-minute cooldown and hysteresis so it never thrashes your system.
-- **System Tray:** Closing the window keeps OpenRelax alive in the tray (optional); run maintenance straight from the tray menu.
-- **Run at Startup & Weekly Scheduled Cleanup:** One checkbox each in Settings.
-- **Disk Analysis:** Shows the 10 largest folders in your user profile (read-only).
-- **Statistics:** Tracks total space cleaned and maintenance runs over time.
-- **TR / EN language support** plus a real-time CPU/RAM/uptime monitor.
+| Area | Concrete implementation |
+|---|---|
+| **Cleanup engine** | Explicit path lists for temporary files, browser/application caches, GPU caches, Windows Error Reporting, update cache and installer leftovers |
+| **Safety model** | Administrator-only targets are marked and skipped without elevation; locked files are skipped; sensitive profile data and diagnostic folders are excluded |
+| **Execution** | Cleanup, scanning and disk analysis run in background PowerShell runspaces so the WinForms UI remains responsive |
+| **Operating modes** | Interactive GUI, tray/minimized startup, scheduled headless cleanup and read-only `-SelfTest` |
+| **Persistence** | Settings and aggregate usage statistics are stored in `%APPDATA%\OpenRelax\settings.json` |
 
----
+## Execution map
 
-## Nasıl Çalıştırılır? / How to Run
+```mermaid
+flowchart LR
+    USER[User or scheduled task] --> MODE{Mode}
+    MODE -->|GUI| SELECT[Select categories]
+    MODE -->|SelfTest| SCAN[Read-only scan]
+    MODE -->|AutoClean| CLEAN[Headless cleanup]
+    SELECT --> WORKER[Background runspace]
+    SCAN --> ENGINE[Shared cleanup engine]
+    CLEAN --> ENGINE
+    WORKER --> ENGINE
+    ENGINE --> GUARDS[Privilege and path guards]
+    GUARDS --> RESULT[Log, result and statistics]
+```
 
-1. Double-click **[launch.bat](launch.bat)** — the console window closes itself and the dark-themed OpenRelax window opens.
-2. Optional command-line modes for [openrelax.ps1](openrelax.ps1):
-   - `-StartMinimized` — start hidden in the system tray (used by the startup entry)
-   - `-AutoClean` — headless cleanup using your saved settings (used by the weekly scheduled task)
-   - `-SelfTest` — read-only scan that prints what would be cleaned, without deleting anything
+The GUI and headless modes use the same serialized engine functions rather than maintaining separate cleanup implementations.
 
-Settings are stored in `%APPDATA%\OpenRelax\settings.json`.
+## Quick start
 
----
+### Open the interface
 
-## Güvenlik Felsefesi / Safety Philosophy
+Clone or download the repository, then run:
 
-OpenRelax deliberately does **not** clean:
+```bat
+launch.bat
+```
 
-- `Windows\Prefetch` — deleting it *slows down* app launches; Windows manages it itself.
-- `Windows\Logs` & `Panther` — needed for diagnostics and upgrade rollback.
-- Browser profiles/bookmarks/history — only regenerable cache directories are targeted.
+The launcher starts `openrelax.ps1` and opens the Windows Forms interface.
 
-The Windows Update cache is cleaned only when running as Administrator, and only after temporarily stopping the update services (they are restarted afterwards). Locked or in-use files are always skipped silently.
+### Inspect without deleting anything
 
----
+Run the read-only engine scan first:
 
-## Lisans / License
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -SelfTest
+```
 
-This project is licensed under the MIT License.
+`-SelfTest` reports the selected targets and what is detectable on the current machine. It is a practical smoke check, **not** a complete automated test suite.
+
+### Other modes
+
+```powershell
+# Start hidden in the system tray
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -StartMinimized
+
+# Run cleanup headlessly with saved settings
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -AutoClean
+```
+
+`-AutoClean` can delete files according to the saved category settings. Use `-SelfTest` first when evaluating the tool on a new system.
+
+## Safety contract
+
+OpenRelax deliberately avoids broad “delete everything” behaviour:
+
+- **Windows Prefetch is not cleaned.** Windows manages it, and removing it can make application launches slower.
+- **`Windows\Logs` and `Windows\Panther` are not cleaned.** They may be needed for diagnostics and upgrade rollback.
+- **Browser bookmarks, history and profile data are not targeted.** Only known regenerable cache directories are included.
+- **Windows Update cleanup is disabled by default** and requires administrator rights. When enabled, the related services are stopped before cleanup and restarted afterward.
+- **Administrator-only paths are skipped** when OpenRelax is not elevated.
+- **Locked or in-use files are skipped** instead of being forced or scheduled for deletion.
+- **Critical Windows processes are excluded** from working-set trimming.
+- **RAM reclamation is temporary by nature.** Applications can request those pages again as their workload continues.
+
+The source remains the final authority. Review `Get-JunkCategories`, `Remove-JunkPaths` and `Invoke-RamTrim` in `openrelax.ps1` before deploying it in a managed environment.
+
+## Features
+
+- One-click maintenance for selected categories
+- User and system temporary-file scanning
+- Chrome, Edge, Brave, Opera/Opera GX and Firefox cache cleanup across detected profiles
+- Discord and GPU shader-cache cleanup
+- Optional Windows Error Reporting, Windows Update and GPU-installer cleanup
+- Recycle Bin cleanup
+- Native Windows API working-set trimming with a critical-process exclusion list
+- Automatic RAM threshold with five-minute cooldown and hysteresis
+- System tray operation and start-with-Windows option
+- Weekly scheduled cleanup using saved settings
+- Read-only largest-folder analysis for the user profile
+- Aggregate cleaned-space and maintenance-run statistics
+- Turkish and English interface strings
+- Live CPU, RAM and uptime display
+
+## Repository map
+
+```text
+openrelax.ps1   Application, UI, engine and operating modes
+launch.bat      No-install Windows launcher
+README.md       Behaviour, safety contract and usage
+PLAN.md         Original implementation plan and design notes
+LICENSE         MIT license text
+```
+
+Keeping the application in one script makes it easy to audit and copy. It also creates a real maintenance limit: the project is not yet split into independently testable modules.
+
+## Current limits
+
+- Windows and Windows Forms only
+- Distributed as source; there is currently no signed installer or signed executable release
+- No automated Windows CI or unit-test suite is present yet
+- The application is a single large PowerShell script, which keeps deployment simple but reduces modular testability
+- Cleanup results vary by permissions, active applications and machine configuration
+- Working-set trimming should not be interpreted as a permanent performance or memory-capacity increase
+
+These limits are stated intentionally so the repository shows what exists now—not what a future release might become.
+
+## Türkçe özet
+
+OpenRelax; geçici dosyaları ve bilinen uygulama önbelleklerini temizleyen, uygun süreçlerin kullanılmayan çalışma setlerini daraltan ve Windows sistem tepsisinde çalışabilen açık kaynak bir bakım aracıdır.
+
+İlk denemede hiçbir dosya silmeden kontrol etmek için:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -SelfTest
+```
+
+Araç; Prefetch klasörünü, Windows tanılama günlüklerini, tarayıcı geçmişini, yer imlerini ve kullanıcı profil verilerini temizlemez. Windows Update temizliği varsayılan olarak kapalıdır ve yalnızca yönetici yetkisiyle çalışır.
+
+## License
+
+Released under the [MIT License](LICENSE).
