@@ -1,8 +1,10 @@
 # OpenRelax PC Care
 
+[![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
+
 A portable Windows maintenance utility built with **PowerShell and Windows Forms**. It runs from source, requires no installer, and keeps its cleanup targets and safety boundaries visible in one inspectable script.
 
-**Current status:** v2.0 focused utility · Windows only · MIT licensed · no signed binary release yet
+**Current status:** v2.0 focused utility · Windows only · MIT licensed · automated parser/self-test verification · no signed binary release yet
 
 > OpenRelax is not a registry “optimizer” and it does not promise permanent RAM gains. It cleans regenerable files, trims eligible process working sets, and reports what happened.
 
@@ -14,6 +16,7 @@ A portable Windows maintenance utility built with **PowerShell and Windows Forms
 | **Safety model** | Administrator-only targets are marked and skipped without elevation; locked files are skipped; sensitive profile data and diagnostic folders are excluded |
 | **Execution** | Cleanup, scanning and disk analysis run in background PowerShell runspaces so the WinForms UI remains responsive |
 | **Operating modes** | Interactive GUI, tray/minimized startup, scheduled headless cleanup and read-only `-SelfTest` |
+| **Verification** | Windows CI parses the complete script and runs the real read-only application self-test on every push and pull request |
 | **Persistence** | Settings and aggregate usage statistics are stored in `%APPDATA%\OpenRelax\settings.json` |
 
 ## Execution map
@@ -54,7 +57,7 @@ Run the read-only engine scan first:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -SelfTest
 ```
 
-`-SelfTest` reports the selected targets and what is detectable on the current machine. It is a practical smoke check, **not** a complete automated test suite.
+`-SelfTest` reports the selected targets and what is detectable on the current machine. It is a practical smoke check, **not** a complete unit-test suite.
 
 ### Other modes
 
@@ -67,6 +70,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -AutoClean
 ```
 
 `-AutoClean` can delete files according to the saved category settings. Use `-SelfTest` first when evaluating the tool on a new system.
+
+## Automated verification
+
+Every push and pull request targeting `main` runs on a GitHub-hosted Windows machine. The verification job:
+
+1. Parses the complete `openrelax.ps1` file with PowerShell's language parser and fails on any syntax error.
+2. Starts the real application in a separate Windows PowerShell process with `-SelfTest`.
+3. Requires a zero exit code, the versioned self-test banner and the final `Self-test OK` marker.
+
+Run the same entrypoint locally:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
+```
+
+This proves that the checked-in script parses and that its non-destructive scan path executes successfully on Windows. It does **not** replace isolated unit tests for each cleanup function or destructive-mode testing on every Windows configuration.
 
 ## Safety contract
 
@@ -103,11 +122,13 @@ The source remains the final authority. Review `Get-JunkCategories`, `Remove-Jun
 ## Repository map
 
 ```text
-openrelax.ps1   Application, UI, engine and operating modes
-launch.bat      No-install Windows launcher
-README.md       Behaviour, safety contract and usage
-PLAN.md         Original implementation plan and design notes
-LICENSE         MIT license text
+openrelax.ps1                  Application, UI, engine and operating modes
+launch.bat                     No-install Windows launcher
+tests/verify.ps1               Parser + real read-only self-test entrypoint
+.github/workflows/verify.yml   Windows CI definition
+README.md                      Behaviour, safety contract and usage
+PLAN.md                        Original implementation plan and design notes
+LICENSE                        MIT license text
 ```
 
 Keeping the application in one script makes it easy to audit and copy. It also creates a real maintenance limit: the project is not yet split into independently testable modules.
@@ -116,7 +137,7 @@ Keeping the application in one script makes it easy to audit and copy. It also c
 
 - Windows and Windows Forms only
 - Distributed as source; there is currently no signed installer or signed executable release
-- No automated Windows CI or unit-test suite is present yet
+- Windows CI covers parser correctness and the real read-only self-test, but there is no isolated unit-test suite yet
 - The application is a single large PowerShell script, which keeps deployment simple but reduces modular testability
 - Cleanup results vary by permissions, active applications and machine configuration
 - Working-set trimming should not be interpreted as a permanent performance or memory-capacity increase
@@ -131,6 +152,12 @@ OpenRelax; geçici dosyaları ve bilinen uygulama önbelleklerini temizleyen, uy
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -SelfTest
+```
+
+Aynı parser ve salt-okunur uygulama kontrolünü yerelde çalıştırmak için:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
 ```
 
 Araç; Prefetch klasörünü, Windows tanılama günlüklerini, tarayıcı geçmişini, yer imlerini ve kullanıcı profil verilerini temizlemez. Windows Update temizliği varsayılan olarak kapalıdır ve yalnızca yönetici yetkisiyle çalışır.
