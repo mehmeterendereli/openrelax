@@ -11,6 +11,49 @@ if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
     throw "OpenRelax entrypoint was not found: $appPath"
 }
 
+function Get-FileFingerprint {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject]@{
+            Exists = $false
+            Hash   = $null
+            Length = [long]0
+        }
+    }
+
+    $file = Get-Item -LiteralPath $Path -ErrorAction Stop
+    return [pscustomobject]@{
+        Exists = $true
+        Hash   = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+        Length = [long]$file.Length
+    }
+}
+
+function Assert-FileFingerprintUnchanged {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Before,
+
+        [Parameter(Mandatory = $true)]
+        $After,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    if ($Before.Exists -ne $After.Exists) {
+        throw "$Label existence changed during -SelfTest."
+    }
+
+    if ($Before.Exists -and (($Before.Hash -ne $After.Hash) -or ($Before.Length -ne $After.Length))) {
+        throw "$Label content changed during -SelfTest."
+    }
+}
+
 Write-Host '== PowerShell parser check =='
 $tokens = $null
 $parseErrors = $null
@@ -29,6 +72,11 @@ if ($parseErrors.Count -gt 0) {
 
 Write-Host "Parser OK: $($tokens.Count) tokens"
 Write-Host '== Read-only application self-test =='
+
+$settingsPath = Join-Path $env:APPDATA 'OpenRelax\settings.json'
+$autoCleanLogPath = Join-Path $env:APPDATA 'OpenRelax\autoclean.log'
+$settingsBefore = Get-FileFingerprint -Path $settingsPath
+$autoCleanLogBefore = Get-FileFingerprint -Path $autoCleanLogPath
 
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
@@ -74,4 +122,10 @@ if ($stdout -notmatch 'Self-test OK') {
     throw 'The application did not emit its Self-test OK completion marker.'
 }
 
-Write-Host 'Verification OK: parser clean and read-only self-test completed.'
+$settingsAfter = Get-FileFingerprint -Path $settingsPath
+$autoCleanLogAfter = Get-FileFingerprint -Path $autoCleanLogPath
+Assert-FileFingerprintUnchanged -Before $settingsBefore -After $settingsAfter -Label 'Settings file'
+Assert-FileFingerprintUnchanged -Before $autoCleanLogBefore -After $autoCleanLogAfter -Label 'AutoClean log'
+
+Write-Host 'Read-only contract OK: settings and AutoClean log were unchanged.'
+Write-Host 'Verification OK: parser clean, self-test completed and persistent state stayed unchanged.'
