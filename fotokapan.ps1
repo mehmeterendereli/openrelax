@@ -39,7 +39,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$FotokapanVersion = '2.1.1'
+$FotokapanVersion = '2.2'
 $InstallDir = Join-Path $InstallRoot 'Fotokapan'
 
 #region Install / uninstall
@@ -152,7 +152,26 @@ function Get-CpuTimes {
 #endregion
 
 #region Capture
-# Returns 'scan' (an on-demand scan explains the load) or 'realtime'.
+# Top scanning processes and the folders holding the most-scanned files, from
+# a Get-MpPerformanceReport object, for the JSONL record.
+function ConvertTo-DefenderTop($Report) {
+    $procs = @(@($Report.TopProcesses) | Where-Object { $_ } | Select-Object -First 3 | ForEach-Object {
+        [ordered]@{ path = [string]$_.ProcessPath; count = [int]$_.Count; ms = [int][Math]::Round(([TimeSpan]$_.TotalDuration).TotalMilliseconds) } })
+    $byFolder = @{}
+    foreach ($f in @(@($Report.TopFiles) | Where-Object { $_ })) {
+        $dir = Split-Path -Parent ([string]$f.Path)
+        if (-not $dir) { continue }
+        if (-not $byFolder.ContainsKey($dir)) { $byFolder[$dir] = @{ count = 0; ms = 0.0 } }
+        $byFolder[$dir].count += [int]$f.Count
+        $byFolder[$dir].ms += ([TimeSpan]$f.TotalDuration).TotalMilliseconds
+    }
+    $folders = @($byFolder.GetEnumerator() | Sort-Object -Property @{ Expression = { $_.Value.ms } } -Descending | Select-Object -First 3 | ForEach-Object {
+        [ordered]@{ path = [string]$_.Key; count = [int]$_.Value.count; ms = [int][Math]::Round($_.Value.ms) } })
+    return [ordered]@{ processes = $procs; folders = $folders }
+}
+
+# Returns @{ Status = 'scan' (an on-demand scan explains the load) or
+# 'realtime'; Top = ConvertTo-DefenderTop result when a recording was taken }.
 function Invoke-DefenderTrace {
     $lines = New-Object System.Collections.Generic.List[string]
     # On-demand scans (quick/full/custom) log 1000 on start and 1001/1002 on
@@ -169,8 +188,9 @@ function Invoke-DefenderTrace {
     if ($scan) {
         $lines.Add("  Defender: elle/zamanlanmış tarama sürüyor ($scan). Yük bu taramadan; performans kaydı alınmadı.")
         Write-Trap ($lines -join "`r`n")
-        return 'scan'
+        return @{ Status = 'scan'; Top = $null }
     }
+    $top = $null
     $lines.Add('  Defender: süren tarama yok, yük gerçek zamanlı taramadan.')
     # A recording costs ~30 s of WPR tracing plus report parsing: rate-limit it.
     if (((Get-Date) - $script:LastDefenderTrace).TotalHours -lt 6) {
@@ -180,9 +200,11 @@ function Invoke-DefenderTrace {
         $etl = Join-Path $LogDir ('defender-{0:yyyyMMdd-HHmmss}.etl' -f (Get-Date))
         try {
             New-MpPerformanceRecording -RecordTo $etl -Seconds 30 | Out-Null
-            $report = Get-MpPerformanceReport -Path $etl -TopProcesses 8 -TopFiles 10 -TopExtensions 8 | Out-String -Width 220
+            # One report object feeds both the human log and the JSONL record
+            $report = Get-MpPerformanceReport -Path $etl -TopProcesses 8 -TopFiles 20 -TopExtensions 8
+            $top = ConvertTo-DefenderTop $report
             $lines.Add('  Defender 30 sn performans kaydı (en çok tarama yaptıran süreçler / dosyalar):')
-            $lines.Add($report.TrimEnd())
+            $lines.Add(($report | Out-String -Width 220).TrimEnd())
         } catch {
             $lines.Add("  Defender performans kaydı alınamadı: $($_.Exception.Message)")
         } finally {
@@ -190,7 +212,7 @@ function Invoke-DefenderTrace {
         }
     }
     Write-Trap ($lines -join "`r`n")
-    return 'realtime'
+    return @{ Status = 'realtime'; Top = $top }
 }
 
 function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
@@ -239,7 +261,7 @@ function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
     $lines.Add('   %CPU      PID  Süreç                  Bellek  Ebeveyn                   Komut satırı')
     foreach ($r in $top) {
         $w = $procs[$r.Id]
-        $name = '?'; $short = '?'; $mem = 0; $parent = ''; $parentName = ''; $cmd = ''
+        $name = '?'; $short = '?'; $mem = 0; $parent = ''; $parentName = ''; $parentCmd = ''; $cmd = ''
         if ($w) {
             $name = $w.Name
             $short = $name
@@ -247,14 +269,18 @@ function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
             $mem  = [int]($w.WorkingSetSize / 1MB)
             $cmd  = Protect-CommandLine $w.CommandLine
             $ppid = [int]$w.ParentProcessId
-            if ($procs.ContainsKey($ppid)) { $parentName = $procs[$ppid].Name; $parent = '{0}({1})' -f $parentName, $ppid }
+            if ($procs.ContainsKey($ppid)) {
+                $parentName = $procs[$ppid].Name; $parent = '{0}({1})' -f $parentName, $ppid
+                # Tells e.g. a Task Scheduler start (svchost ... -s Schedule) from a user launch
+                $parentCmd = Protect-CommandLine $procs[$ppid].CommandLine 160
+            }
             else { $parent = "(kapanmış $ppid)" }
         }
         $lines.Add(('  {0,5:N1} {1,8}  {2,-20} {3,6}MB  {4,-24}  {5}' -f $r.Pct, $r.Id, $short, $mem, $parent, $cmd))
         if ($topRecords.Count -lt 5) {
             $topRecords.Add([ordered]@{
                 name = $name; pid = $r.Id; pct = [Math]::Round($r.Pct, 1)
-                parent = $parentName; cmd = (Protect-CommandLine $w.CommandLine 200)
+                parent = $parentName; parentCmd = $parentCmd; cmd = (Protect-CommandLine $w.CommandLine 200)
             })
         }
     }
@@ -274,15 +300,18 @@ function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
     }
     Write-Trap ($lines -join "`r`n")
 
-    $defender = $null
+    $defender = $null; $defenderTop = $null
     $busyDefender = $top | Select-Object -First 3 |
         Where-Object { $procs[$_.Id] -and $procs[$_.Id].Name -eq 'MsMpEng.exe' -and $_.Pct -ge 10 }
-    if ($busyDefender) { $defender = Invoke-DefenderTrace }
+    if ($busyDefender) {
+        $def = Invoke-DefenderTrace
+        $defender = $def.Status; $defenderTop = $def.Top
+    }
 
     Write-TrapRecord ([ordered]@{
         t = $start.ToString('s'); kind = $Kind
         window = [Math]::Round($elapsed / 1000, 1); total = [Math]::Round($total, 1); attributed = [Math]::Round($attributed, 1)
-        top = $topRecords.ToArray(); defender = $defender   # not @(): PS 5.1 fails on @(List[object]) inside [ordered]
+        top = $topRecords.ToArray(); defender = $defender; defenderTop = $defenderTop   # not @(): PS 5.1 fails on @(List[object]) inside [ordered]
     })
 }
 #endregion

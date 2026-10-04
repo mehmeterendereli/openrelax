@@ -129,5 +129,23 @@ $dry = Invoke-RamTrim -DryRun
 $fgPid = [int][Win32Helper]::GetForegroundProcessId()
 Check 'dry run on live processes never targets the foreground app or itself' ($dry.Success -eq 0 -and @($dry.Targets) -notcontains $PID -and ($fgPid -eq 0 -or @($dry.Targets) -notcontains $fgPid) -and $dry.Skipped -gt 0) ("targets $(@($dry.Targets).Count), skipped $($dry.Skipped), fg $fgPid")
 
+# --- recorder helpers (fotokapan.ps1) ---
+. (Get-FunctionSource $trap 'Protect-CommandLine', 'ConvertTo-DefenderTop')
+$masked = Protect-CommandLine 'tool.exe --token abc123 --api-key=XYZ password "a b c" --keep me'
+Check 'command lines are masked, other arguments kept' ($masked -notmatch 'abc123|XYZ|a b c' -and $masked -match '--keep me') $masked
+$fake = [pscustomobject]@{
+    TopProcesses = @([pscustomobject]@{ ProcessPath = 'C:\x\codex.exe'; Count = 83; TotalDuration = [TimeSpan]::FromMilliseconds(937) })
+    TopFiles = @(
+        [pscustomobject]@{ Path = 'C:\u\.codex\sessions\a.jsonl'; Count = 8; TotalDuration = [TimeSpan]::FromMilliseconds(65) },
+        [pscustomobject]@{ Path = 'C:\u\.codex\sessions\b.jsonl'; Count = 4; TotalDuration = [TimeSpan]::FromMilliseconds(30) },
+        [pscustomobject]@{ Path = 'C:\t\x.tmp'; Count = 1; TotalDuration = [TimeSpan]::FromMilliseconds(12) })
+}
+$top = ConvertTo-DefenderTop $fake
+Check 'Defender top process kept with count and ms' ($top.processes[0].path -eq 'C:\x\codex.exe' -and $top.processes[0].count -eq 83 -and $top.processes[0].ms -eq 937)
+Check 'scanned files fold into their folders, heaviest first' ($top.folders[0].path -eq 'C:\u\.codex\sessions' -and $top.folders[0].count -eq 12 -and $top.folders[0].ms -eq 95 -and $top.folders.Count -eq 2)
+$empty = ConvertTo-DefenderTop ([pscustomobject]@{ TopProcesses = $null; TopFiles = $null })
+Check 'an empty report gives empty lists, not an error' (@($empty.processes).Count -eq 0 -and @($empty.folders).Count -eq 0)
+Check 'Defender top serializes as the JSONL contract expects' ((ConvertTo-Json -InputObject $top -Compress -Depth 5) -match '^\{"processes":\[\{"path":"C:\\\\x\\\\codex.exe","count":83,"ms":937\}\],"folders":\[')
+
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)

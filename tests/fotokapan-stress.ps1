@@ -77,6 +77,8 @@ $marked = @($starts | Where-Object { @($_.top).Count -gt 0 -and [string]$_.top[0
 Check 'the burst processes are named as top culprit' ($marked.Count -ge [Math]::Ceiling($starts.Count * 0.6)) ('{0}/{1}' -f $marked.Count, $starts.Count)
 $attributed = @($starts | Where-Object { [double]$_.total -gt 0 -and ([double]$_.attributed / [double]$_.total) -ge 0.7 })
 Check 'burst window attributes most of the CPU to processes' ($attributed.Count -ge [Math]::Ceiling($starts.Count * 0.6)) ('{0}/{1} with >= 70%' -f $attributed.Count, $starts.Count)
+$withParentCmd = @($starts | Where-Object { @($_.top).Count -gt 0 -and $_.top[0].PSObject.Properties.Name -contains 'parentCmd' })
+Check 'top entries carry the parent command line' ($withParentCmd.Count -eq $starts.Count) ('{0}/{1}' -f $withParentCmd.Count, $starts.Count)
 $errorLines = @(Get-Content -LiteralPath (Get-ChildItem -LiteralPath $logDir -Filter 'fotokapan-*.log').FullName -Encoding UTF8 | Where-Object { $_ -match '! (Hata|CPU)' })
 Check 'no errors in the text log' ($errorLines.Count -eq 0) (($errorLines | Select-Object -First 2) -join ' | ')
 $beat = Get-Content -LiteralPath (Join-Path $logDir 'durum.json') -Raw | ConvertFrom-Json
