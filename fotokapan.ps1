@@ -31,13 +31,16 @@ param(
     [int]$DurationSec = 0,
     [string]$LogDir   = (Join-Path $env:ProgramData 'OpenRelax\Fotokapan'),
     [switch]$Install,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    # Install location and task name; overridable so tests\trap-install.ps1
+    # can install into a throw-away folder under a test task name.
+    [string]$InstallRoot = (Join-Path $env:ProgramData 'OpenRelax'),
+    [string]$TaskName    = 'OpenRelax Fotokapan'
 )
 
 $ErrorActionPreference = 'Stop'
 $FotokapanVersion = '2.1'
-$TaskName   = 'OpenRelax Fotokapan'
-$InstallDir = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
+$InstallDir = Join-Path $InstallRoot 'Fotokapan'
 
 #region Install / uninstall
 if ($Install -or $Uninstall) {
@@ -56,13 +59,19 @@ if ($Install -or $Uninstall) {
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    # Logged command lines can contain tokens: keep the folder private to
-    # SYSTEM, Administrators and the installing user.
-    & icacls.exe $InstallDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "$($env:USERDOMAIN)\$($env:USERNAME):(OI)(CI)F" | Out-Null
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $InstallDir 'fotokapan.ps1') -Force
+    # Only SYSTEM and Administrators may change what the SYSTEM task runs; the
+    # installing user only reads the logs (command lines can carry tokens, so
+    # other users get nothing). Inheritance is cut on both levels so the
+    # ProgramData rule letting Users create files does not reach in, and
+    # existing files lose the Full Control that 2.1 granted the user.
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    & icacls.exe $InstallRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    & icacls.exe $InstallDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($userSid):(OI)(CI)RX" | Out-Null
+    & icacls.exe (Join-Path $InstallDir '*') /reset /T /C /Q | Out-Null
 
     $ps        = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $action    = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f (Join-Path $InstallDir 'fotokapan.ps1'))
+    $action    = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -LogDir "{1}"' -f (Join-Path $InstallDir 'fotokapan.ps1'), $InstallDir)
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     # Task Scheduler defaults to priority 7 (below normal), which would starve
