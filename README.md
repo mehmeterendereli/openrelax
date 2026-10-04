@@ -6,7 +6,7 @@
 
 A portable Windows maintenance utility built with **PowerShell and Windows Forms**. It runs from source, requires no installer, and keeps its cleanup targets and safety boundaries visible in one inspectable script.
 
-**Current status:** source version 2.2 ([changelog](CHANGELOG.md)) · long-term support: 2.1.1 LTS on branch `lts/2.1` · focused Windows utility · MIT licensed · CI: parser, read-only self-test, unit tests and engine stress · no signed binary release
+**Current status:** source version 2.2.1 ([changelog](CHANGELOG.md)) · long-term support: 2.1.1 LTS on branch `lts/2.1` · focused Windows utility · MIT licensed · CI: parser, read-only self-test, unit tests and engine stress · no signed binary release
 
 > OpenRelax is not a registry “optimizer” and it does not promise permanent RAM gains. It cleans regenerable files, trims eligible process working sets, and reports what happened.
 

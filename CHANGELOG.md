@@ -1,6 +1,9 @@
 # Changelog
 
-## 2.2 — 2026-10-04
+## 2.2.1 — 2026-10-04
+
+### Fixed
+- **Fotokapan lost its Defender recording on the first live spike.** Defender reports can hold rows with an empty path, and the folder summary passed those to `Split-Path`, which throws. That one exception discarded the whole 30-second recording, and the 6-hour rate limit then blocked a retry. The summary now skips rows without a path and folds archive members (`C:\a.zip->inner\file`) into the archive's folder. If the summary still fails, the text report is logged anyway.
 
 Feature release on top of 2.1.1 LTS; the long-term-support line stays on branch `lts/2.1`. Plan: `docs/superpowers/plans/2026-10-04-openrelax-2.2.md`.
 

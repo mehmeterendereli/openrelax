@@ -9,7 +9,7 @@ param(
     [switch]$SelfTest
 )
 
-$script:AppVersion   = '2.2'
+$script:AppVersion   = '2.2.1'
 $script:AppEdition   = ''   # 'LTS' on the long-term-support line (branch lts/2.1)
 $script:AppLabel     = "v$script:AppVersion"
 if ($script:AppEdition) { $script:AppLabel += " $script:AppEdition" }

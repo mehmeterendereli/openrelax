@@ -151,6 +151,18 @@ Check 'Defender top process kept with count and ms' ($top.processes[0].path -eq 
 Check 'scanned files fold into their folders, heaviest first' ($top.folders[0].path -eq 'C:\u\.codex\sessions' -and $top.folders[0].count -eq 12 -and $top.folders[0].ms -eq 95 -and $top.folders.Count -eq 2)
 $empty = ConvertTo-DefenderTop ([pscustomobject]@{ TopProcesses = $null; TopFiles = $null })
 Check 'an empty report gives empty lists, not an error' (@($empty.processes).Count -eq 0 -and @($empty.folders).Count -eq 0)
+# Live reports hold rows without a path, and archive members read "C:\a.zip->inner\file"
+$odd = $null
+try {
+    $odd = ConvertTo-DefenderTop ([pscustomobject]@{
+        TopProcesses = @([pscustomobject]@{ ProcessPath = ''; Count = 1; TotalDuration = [TimeSpan]::FromMilliseconds(6) })
+        TopFiles = @(
+            [pscustomobject]@{ Path = ''; Count = 3; TotalDuration = [TimeSpan]::FromMilliseconds(9) },
+            [pscustomobject]@{ Path = 'C:\d\pack.zip->inner\x.js'; Count = 2; TotalDuration = [TimeSpan]::FromMilliseconds(5) },
+            [pscustomobject]@{ Path = 'C:\y.txt'; Count = 1; TotalDuration = [TimeSpan]::FromMilliseconds(1) })
+    })
+} catch { Write-Host "  ConvertTo-DefenderTop threw: $($_.Exception.Message)" }
+Check 'rows without a path are skipped, archive members count for the archive folder' ($odd -and @($odd.processes).Count -eq 0 -and @($odd.folders).Count -eq 2 -and $odd.folders[0].path -eq 'C:\d' -and $odd.folders[0].count -eq 2 -and $odd.folders[1].path -eq 'C:\')
 Check 'Defender top serializes as the JSONL contract expects' ((ConvertTo-Json -InputObject $top -Compress -Depth 5) -match '^\{"processes":\[\{"path":"C:\\\\x\\\\codex.exe","count":83,"ms":937\}\],"folders":\[')
 
 # --- diagnosis ---

@@ -39,7 +39,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$FotokapanVersion = '2.2'
+$FotokapanVersion = '2.2.1'
 $InstallDir = Join-Path $InstallRoot 'Fotokapan'
 
 #region Install / uninstall
@@ -153,14 +153,19 @@ function Get-CpuTimes {
 
 #region Capture
 # Top scanning processes and the folders holding the most-scanned files, from
-# a Get-MpPerformanceReport object, for the JSONL record.
+# a Get-MpPerformanceReport object, for the JSONL record. Live reports hold
+# rows without a path and archive members as "C:\a.zip->inner\file", so the
+# folder is cut out with plain string work (Split-Path throws on '').
 function ConvertTo-DefenderTop($Report) {
-    $procs = @(@($Report.TopProcesses) | Where-Object { $_ } | Select-Object -First 3 | ForEach-Object {
+    $procs = @(@($Report.TopProcesses) | Where-Object { $_ -and [string]$_.ProcessPath } | Select-Object -First 3 | ForEach-Object {
         [ordered]@{ path = [string]$_.ProcessPath; count = [int]$_.Count; ms = [int][Math]::Round(([TimeSpan]$_.TotalDuration).TotalMilliseconds) } })
     $byFolder = @{}
     foreach ($f in @(@($Report.TopFiles) | Where-Object { $_ })) {
-        $dir = Split-Path -Parent ([string]$f.Path)
-        if (-not $dir) { continue }
+        $p = ([string]$f.Path -split '->', 2)[0]
+        $cut = $p.LastIndexOf('\')
+        if ($cut -le 0) { continue }
+        $dir = $p.Substring(0, $cut)
+        if ($dir -match '^[A-Za-z]:$') { $dir += '\' }
         if (-not $byFolder.ContainsKey($dir)) { $byFolder[$dir] = @{ count = 0; ms = 0.0 } }
         $byFolder[$dir].count += [int]$f.Count
         $byFolder[$dir].ms += ([TimeSpan]$f.TotalDuration).TotalMilliseconds
@@ -202,9 +207,10 @@ function Invoke-DefenderTrace {
             New-MpPerformanceRecording -RecordTo $etl -Seconds 30 | Out-Null
             # One report object feeds both the human log and the JSONL record
             $report = Get-MpPerformanceReport -Path $etl -TopProcesses 8 -TopFiles 20 -TopExtensions 8
-            $top = ConvertTo-DefenderTop $report
             $lines.Add('  Defender 30 sn performans kaydı (en çok tarama yaptıran süreçler / dosyalar):')
             $lines.Add(($report | Out-String -Width 220).TrimEnd())
+            # The JSONL summary is extra: a failure there must not cost the text report
+            try { $top = ConvertTo-DefenderTop $report } catch { $lines.Add("  (Defender özeti çıkarılamadı: $($_.Exception.Message))") }
         } catch {
             $lines.Add("  Defender performans kaydı alınamadı: $($_.Exception.Message)")
         } finally {
