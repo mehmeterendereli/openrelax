@@ -39,7 +39,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$FotokapanVersion = '2.1'
+$FotokapanVersion = '2.1.1'
 $InstallDir = Join-Path $InstallRoot 'Fotokapan'
 
 #region Install / uninstall
