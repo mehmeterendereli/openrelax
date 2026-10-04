@@ -11,6 +11,7 @@
 param(
     [int]$Cycles = 60,
     [int]$Launches = 5,
+    [switch]$WithDisk,   # end the stress run with one real (read-only, <= 90 s) disk analysis
     [string]$Work = (Join-Path $env:TEMP ('openrelax-gui-stress-' + [guid]::NewGuid().ToString('N').Substring(0, 8)))
 )
 $ErrorActionPreference = 'Stop'
@@ -55,11 +56,12 @@ for ($i = 0; $i -lt 300; $i++) {
 $env:OPENRELAX_STRESS = [string]$Cycles
 $env:OPENRELAX_STRESS_REPORT = $report
 $env:OPENRELAX_TRAP_DIR = $trapDir
+if ($WithDisk) { $env:OPENRELAX_STRESS_DISK = '1' }
 try {
     $p = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList $appArgs `
         -RedirectStandardError (Join-Path $Work 'stderr.txt') -RedirectStandardOutput (Join-Path $Work 'stdout.txt')
 } finally {
-    Remove-Item Env:\OPENRELAX_STRESS, Env:\OPENRELAX_STRESS_REPORT, Env:\OPENRELAX_TRAP_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\OPENRELAX_STRESS, Env:\OPENRELAX_STRESS_REPORT, Env:\OPENRELAX_TRAP_DIR, Env:\OPENRELAX_STRESS_DISK -ErrorAction SilentlyContinue
 }
 $exited = $p.WaitForExit(15 * 60 * 1000)
 if (-not $exited) { try { $p.Kill() } catch {} }
@@ -80,6 +82,9 @@ if (Test-Path -LiteralPath $report) {
         Check 'junk scans ran in the worker alongside the UI' ($r.scans -ge 2) ('{0} scans' -f $r.scans)
     }
     Check 'no worker left running at exit' (-not $r.busyAtEnd)
+    if ($WithDisk) {
+        Check 'disk analysis ran through the real button and filled the list' ($r.diskRan -and $r.diskItems -gt 0) ('{0} folders listed' -f $r.diskItems)
+    }
     $samples = @($r.samples)
     $warm = @($samples | Where-Object { $_.cycle -ge 10 })
     if ($warm.Count -ge 2) {

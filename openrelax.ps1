@@ -1,7 +1,8 @@
 ﻿# OpenRelax PC Care v2.1 LTS - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
-#                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
+#                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder,
+#                   OPENRELAX_STRESS_DISK=1 end a stress run with one disk analysis
 param(
     [switch]$AutoClean,
     [switch]$StartMinimized,
@@ -94,6 +95,7 @@ $script:Strings = @{
         headerSub        = 'Tek butonla seçili kategorilerdeki önbellekleri ve disk çöplerini temizleyin, RAM bellek alanlarını boşaltın.'
         btnOneClick      = 'Tek Tıkla Sistem Bakımı Yap'
         btnCleaning      = 'Temizleniyor...'
+        btnCleaningProgress = 'Temizleniyor · {0} dosya · {1}'
         statusAdmin      = 'Durum: Yönetici Modu'
         statusUser       = 'Durum: Kullanıcı Modu'
         statusBusy       = 'Durum: Çalışıyor...'
@@ -168,7 +170,9 @@ $script:Strings = @{
         logTrapFailed    = 'Fotokapan işlemi başarısız (çıkış kodu {0}).'
         logTrapCancelled = 'Yönetici izni verilmedi, işlem iptal edildi.'
         logTrapNoScript  = 'fotokapan.ps1 OpenRelax klasöründe bulunamadı.'
-        diskProgress     = 'Taranıyor {0}/{1}: {2}'
+        diskProgress     = 'Taranıyor: {0} klasör · {1}'
+        diskRootFiles    = '(profil kökündeki dosyalar)'
+        logDiskPartial   = 'Analiz 90 sn sınırında durdu; boyutlar alt sınırdır.'
         trayBalloon      = 'OpenRelax arka planda çalışmaya devam ediyor. Çıkmak için tepsi simgesine sağ tıklayın.'
         logStart         = 'Sistem taraması başlatıldı...'
         logAdminOn       = 'Yönetici yetkileri aktif (Tam Sistem Temizliği).'
@@ -222,6 +226,7 @@ $script:Strings = @{
         headerSub        = 'Clean caches and disk junk in the selected categories and trim RAM working sets with a single click.'
         btnOneClick      = 'Run One-Click Maintenance'
         btnCleaning      = 'Cleaning...'
+        btnCleaningProgress = 'Cleaning · {0} files · {1}'
         statusAdmin      = 'Status: Administrator Mode'
         statusUser       = 'Status: User Mode'
         statusBusy       = 'Status: Working...'
@@ -296,7 +301,9 @@ $script:Strings = @{
         logTrapFailed    = 'Spike Trap action failed (exit code {0}).'
         logTrapCancelled = 'Administrator permission was not granted; cancelled.'
         logTrapNoScript  = 'fotokapan.ps1 was not found next to OpenRelax.'
-        diskProgress     = 'Scanning {0}/{1}: {2}'
+        diskProgress     = 'Scanning: {0} folders · {1}'
+        diskRootFiles    = '(files in the profile root)'
+        logDiskPartial   = 'Analysis stopped at the 90 s limit; sizes are lower bounds.'
         trayBalloon      = 'OpenRelax keeps running in the background. Right-click the tray icon to exit.'
         logStart         = 'System scan started...'
         logAdminOn       = 'Administrator privileges active (full system cleanup).'
@@ -711,6 +718,8 @@ try {
     }
 
     $Sync.Log.Enqueue(@{ Key = 'logCleanStart'; Type = 'info' })
+    # Invoke-JunkWalk adds to these as it deletes; the pump shows them live
+    $Sync.CleanDone = [long]0; $Sync.CleanBytes = [long]0; $Sync.Cleaning = $true
     $cats = Get-JunkCategories
     $deletedBytes = [long]0; $deletedCount = [long]0
     foreach ($cat in $cats) {
@@ -741,8 +750,11 @@ try {
         Clear-DnsClientCache -ErrorAction SilentlyContinue
         $Sync.Log.Enqueue(@{ Key = 'logDnsDone'; Type = 'success' })
     } catch {}
+    # Progress off before the result, so the pump never shows a stale count after it
+    $Sync.Cleaning = $false
     $Sync.CleanResult = @{ Bytes = $deletedBytes; Count = $deletedCount }
 } catch {
+    $Sync.Cleaning = $false
     $Sync.Log.Enqueue(@{ Text = "Clean error: $($_.Exception.Message)"; Type = 'error' })
     $Sync.CleanResult = @{ Bytes = 0; Count = 0 }
 }
@@ -762,24 +774,17 @@ try {
 $script:DiskTaskCode = @'
 param($Sync, $Opt)
 try {
-    $rows = @()
-    $dirs = Get-ChildItem -LiteralPath $Opt.Target -Directory -Force -ErrorAction SilentlyContinue
-    $seen = [long]0; $n = 0; $count = @($dirs).Count
-    foreach ($d in $dirs) {
-        $n++
-        $Sync.DiskProgress = @($n, $count, $d.Name)
-        $sz = [long]0
-        Get-ChildItem -LiteralPath $d.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            $sz += $_.Length
-            if ((++$seen % 500) -eq 0) { $Sync.Beat = [DateTime]::UtcNow }
-        }
-        $rows += @{ Name = $d.Name; Size = $sz }
-    }
-    $top = $rows | Sort-Object -Property @{ Expression = { $_.Size } } -Descending | Select-Object -First 10
-    $Sync.DiskResult = @{ Rows = @($top); Count = @($dirs).Count }
+    $Sync.DiskRunning = $true
+    # One bounded walk with per-folder totals instead of a full walk per folder
+    $w = Invoke-JunkWalk -Root $Opt.Target -ByTopFolder -BudgetMs 90000
+    $rows = foreach ($k in @($w.Folders.Keys)) { @{ Name = [string]$k; Size = [long]$w.Folders[$k] } }
+    $top = @($rows | Sort-Object -Property @{ Expression = { $_.Size } } -Descending | Select-Object -First 10)
+    $Sync.DiskRunning = $false
+    $Sync.DiskResult = @{ Rows = $top; Count = $w.Folders.Count; Partial = $w.Partial }
 } catch {
+    $Sync.DiskRunning = $false
     $Sync.Log.Enqueue(@{ Text = "Disk analysis error: $($_.Exception.Message)"; Type = 'error' })
-    $Sync.DiskResult = @{ Rows = @(); Count = 0 }
+    $Sync.DiskResult = @{ Rows = @(); Count = 0; Partial = $false }
 }
 '@
 #endregion
@@ -2534,15 +2539,22 @@ function Complete-Ram {
 
 function Complete-Disk {
     param($r)
-    $script:Sync.DiskProgress = $null
+    $script:Sync.DiskRunning = $false
+    $script:Sync.WalkInfo = $null
     $diskDesc.Text = (T 'diskDesc')
     $lvDisk.Items.Clear()
     foreach ($row in $r.Rows) {
-        $item = New-Object System.Windows.Forms.ListViewItem($row.Name)
-        [void]$item.SubItems.Add((Format-Bytes ([long]$row.Size)))
+        $name = [string]$row.Name
+        if (-not $name) { $name = (T 'diskRootFiles') }
+        $size = Format-Bytes ([long]$row.Size)
+        # The 90 s budget ran out: sizes are lower bounds
+        if ($r.Partial) { $size = '≥ ' + $size }
+        $item = New-Object System.Windows.Forms.ListViewItem($name)
+        [void]$item.SubItems.Add($size)
         [void]$lvDisk.Items.Add($item)
     }
     Write-Log ([string]::Format((T 'logDiskDone'), $r.Count)) 'success'
+    if ($r.Partial) { Write-Log (T 'logDiskPartial') 'warn' }
     $btnAnalyze.Enabled = $true
     $btnAnalyze.Text = (T 'btnAnalyze')
     $script:Sync.Busy = $false
@@ -2627,6 +2639,11 @@ if ($script:StressCycles -gt 0) {
                     if (-not $script:Sync.Busy -and ($cycle % 3) -eq 0) { Start-ScanTask; $script:StressScans++ }
                     Add-StressSample $cycle
                 }
+            } elseif ($env:OPENRELAX_STRESS_DISK -and -not $script:StressDiskStarted -and -not $script:Sync.Busy) {
+                # Optional last step: one real disk analysis (read-only, at most 90 s)
+                $script:StressDiskStarted = $true
+                Show-View 'disk'
+                $btnAnalyze.PerformClick()
             } elseif (-not $script:Sync.Busy -or $script:StressClock.Elapsed.TotalMinutes -gt 10) {
                 $script:StressTimer.Stop()
                 $script:Settings.language = $script:StressLanguage
@@ -2636,6 +2653,7 @@ if ($script:StressCycles -gt 0) {
                     version = "$script:AppVersion $script:AppEdition"; cycles = $script:StressCycles; scans = $script:StressScans
                     seconds = [Math]::Round($script:StressClock.Elapsed.TotalSeconds, 1); busyAtEnd = [bool]$script:Sync.Busy
                     logErrors = [int]$script:LogErrors; lastError = [string]$script:LastErrorText; tickError = [bool]$script:TickErrorShown
+                    diskRan = [bool]$script:StressDiskStarted; diskItems = $lvDisk.Items.Count
                     errors = $script:StressErrors.ToArray(); samples = $script:StressSamples.ToArray()
                 }
                 if ($script:StressReport) { ConvertTo-Json -InputObject $report -Depth 5 | Set-Content -LiteralPath $script:StressReport -Encoding UTF8 }
@@ -2695,19 +2713,27 @@ $pump.add_Tick({
                 $btnOneClick.Invalidate()
                 $btnAnalyze.Enabled = $true
                 $btnAnalyze.Text = (T 'btnAnalyze')
-                $script:Sync.DiskProgress = $null
+                $script:Sync.DiskRunning = $false
+                $script:Sync.WalkInfo = $null
+                $script:Sync.Cleaning = $false
                 $diskDesc.Text = (T 'diskDesc')
                 $lblJunkVal.Text = '—'
                 Update-Status
             }
         }
 
-        $dp = $script:Sync.DiskProgress
-        if ($dp) {
-            $txt = [string]::Format((T 'diskProgress'), $dp[0], $dp[1], $dp[2])
+        if ($script:Sync.DiskRunning -and $script:Sync.WalkInfo) {
+            $wi = $script:Sync.WalkInfo
+            $where = [string]$wi[1]
+            if (-not $where) { $where = '...' }
+            $txt = [string]::Format((T 'diskProgress'), ([long]$wi[0]).ToString('N0'), $where)
             if ($diskDesc.Text -ne $txt) { $diskDesc.Text = $txt }
         }
         if ($script:TrapProc) { Complete-TrapAction }
+        if ($script:Sync.Cleaning) {
+            $txt = [string]::Format((T 'btnCleaningProgress'), ([long]$script:Sync.CleanDone).ToString('N0'), (Format-Bytes ([long]$script:Sync.CleanBytes)))
+            if ($btnOneClick.Text -ne $txt) { $btnOneClick.Text = $txt; $btnOneClick.Invalidate() }
+        }
 
         if ($script:Sync.ScanResult)  { $r = $script:Sync.ScanResult;  $script:Sync.ScanResult = $null;  Complete-Scan $r }
         if ($script:Sync.CleanResult) { $r = $script:Sync.CleanResult; $script:Sync.CleanResult = $null; Complete-Clean $r }
@@ -2746,6 +2772,7 @@ $btnAnalyze.add_Click({
     $btnAnalyze.Text = (T 'analyzing')
     Update-Status
     Write-Log (T 'logDiskStart') 'info'
+    $script:Sync.WalkInfo = $null
     Start-EngineTask $script:DiskTaskCode @{ Target = $env:USERPROFILE }
 })
 #endregion
