@@ -158,6 +158,17 @@ $script:Strings = @{
         colCulprit       = 'Sorumlu'
         colNote          = 'Not'
         trapDrivers      = 'Sürücüler (kesme/DPC)'
+        diag_defender_scan = 'Sıçramaların %{0} kadarı Defender taramasından. Zamanlanmış ve elle başlatılan taramaları bilgisayarı kullanmadığınız saatlere alın.'
+        diag_defender_rt = 'Sıçramaların %{0} kadarı Defender''ın gerçek zamanlı taramasından; en çok taranan klasör: {2}. Güvendiğiniz bir çalışma klasörüyse yalnızca o klasör için dar bir istisna düşünün.'
+        diag_drivers     = 'Sıçramaların %{0} kadarında yük hiçbir sürece ait değil (kesme/DPC): sürücü kaynaklı. Ekran kartı, ağ ve ses sürücülerini güncelleyin; LatencyMon ile doğrulayın.'
+        diag_game        = 'Sıçramaların %{0} kadarı oyunlardan ({1}); oyun sırasında beklenen bir yük.'
+        diag_devtools    = 'Sıçramaların %{0} kadarı geliştirici/AI araçlarından ({1}). Ağır derleme ve ajan görevlerini zamanlayın veya paralel iş sayısını sınırlayın.'
+        diag_browser     = 'Sıçramaların %{0} kadarı tarayıcıdan ({1}). Ağır sekme ve uzantıları tarayıcının görev yöneticisinde (Shift+Esc) bulun.'
+        diag_windows     = 'Sıçramaların %{0} kadarı Windows hizmetlerinden ({1}); güncelleme, dizinleme veya bakım görevleri olabilir.'
+        diag_other       = 'Sıçramaların %{0} kadarı {1} kaynaklı.'
+        diag_scheduled   = '{3} sıçrama zamanlanmış bir görevle başladı (en sık: {1}). Görev Zamanlayıcı''da çalışma saatlerini kontrol edin.'
+        diag_none        = 'Son 7 günde kayıtlı sıçrama yok.'
+        diagUnknownFolder = 'henüz bilinmiyor'
         trapNoteScan     = 'Defender taraması'
         trapNoteRealtime = 'Defender gerçek zamanlı'
         trapCut          = 'kesildi'
@@ -291,6 +302,17 @@ $script:Strings = @{
         colCulprit       = 'Culprit'
         colNote          = 'Note'
         trapDrivers      = 'Drivers (interrupt/DPC)'
+        diag_defender_scan = 'Defender scans cause about {0}% of the spikes. Move scheduled and manual scans to hours when the PC is idle.'
+        diag_defender_rt = 'About {0}% come from Defender''s real-time scanning; most-scanned folder: {2}. If you trust that working folder, consider a narrow exclusion for it alone.'
+        diag_drivers     = 'In about {0}% the load belongs to no process (interrupts/DPC): a driver. Update graphics, network and audio drivers; confirm with LatencyMon.'
+        diag_game        = 'About {0}% come from games ({1}) - expected while playing.'
+        diag_devtools    = 'About {0}% come from developer/AI tools ({1}). Schedule heavy builds and agent jobs or limit their parallelism.'
+        diag_browser     = 'About {0}% come from the browser ({1}). Find heavy tabs and extensions in its task manager (Shift+Esc).'
+        diag_windows     = 'About {0}% come from Windows services ({1}): updates, indexing or maintenance.'
+        diag_other       = 'About {0}% come from {1}.'
+        diag_scheduled   = '{3} spikes started from a scheduled task (most often {1}). Check its times in Task Scheduler.'
+        diag_none        = 'No spikes recorded in the last 7 days.'
+        diagUnknownFolder = 'not known yet'
         trapNoteScan     = 'Defender scan'
         trapNoteRealtime = 'Defender real-time'
         trapCut          = 'cut off'
@@ -1049,6 +1071,102 @@ function Get-TrapCulprits {
 
 function ConvertFrom-TrapTime([string]$Iso) {
     return [datetime]::ParseExact($Iso, 's', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-TrapCulpritText([string]$Name) {
+    if ($Name -eq '*drivers*') { return (T 'trapDrivers') }
+    return $Name
+}
+
+# Coarse category of a culprit process, matched by name (wildcards allowed).
+# The lists stay short on purpose: unknown names are simply 'other'.
+function Get-TrapCategory([string]$Name) {
+    $map = [ordered]@{
+        defender = 'MsMpEng.exe', 'MpDefenderCoreService.exe', 'NisSrv.exe', 'MsSense.exe', 'MpCmdRun.exe', 'SecurityHealthService.exe'
+        game     = '*Shipping.exe', 'League of Legends.exe', 'LeagueClient*.exe', 'TFTClient*.exe', 'Riot*.exe', 'vgc.exe', 'VALORANT*.exe',
+                   'steam.exe', 'steamwebhelper.exe', 'EpicGamesLauncher.exe', 'cs2.exe', 'dota2.exe', 'HD-Player.exe', 'Bluestacks*.exe'
+        devtools = 'node.exe', 'python*.exe', 'py.exe', 'java.exe', 'javaw.exe', 'gradle*.exe', 'dotnet.exe', 'MSBuild.exe', 'VBCSCompiler.exe',
+                   'cl.exe', 'link.exe', 'rustc.exe', 'cargo.exe', 'go.exe', 'git.exe', 'pwsh.exe', 'powershell.exe', 'codex*.exe', 'claude.exe',
+                   'ChatGPT.exe', 'Code.exe', 'devenv.exe', 'idea64.exe', 'studio64.exe', 'Docker*.exe', 'com.docker*.exe', 'vmmem*', 'wsl*.exe',
+                   'bun.exe', 'deno.exe', 'esbuild.exe', 'tsc.exe'
+        browser  = 'chrome.exe', 'msedge.exe', 'msedgewebview2.exe', 'firefox.exe', 'brave.exe', 'opera.exe', 'vivaldi.exe'
+        windows  = 'System', 'Registry', 'MemCompression', 'svchost.exe', 'TiWorker.exe', 'TrustedInstaller.exe', 'MoUsoCoreWorker.exe',
+                   'wuauclt.exe', 'SearchIndexer.exe', 'SearchProtocolHost.exe', 'SearchFilterHost.exe', 'CompatTelRunner.exe', 'WmiPrvSE.exe',
+                   'dwm.exe', 'explorer.exe', 'sihost.exe', 'RuntimeBroker.exe', 'audiodg.exe', 'lsass.exe', 'csrss.exe', 'services.exe',
+                   'dllhost.exe', 'taskhostw.exe', 'msiexec.exe'
+    }
+    foreach ($cat in $map.Keys) {
+        foreach ($pattern in $map[$cat]) { if ($Name -like $pattern) { return $cat } }
+    }
+    return 'other'
+}
+
+# Started by Task Scheduler: COM-handler tasks run under taskhostw.exe,
+# program tasks are children of the svchost instance hosting "Schedule".
+function Test-TrapScheduled($Top) {
+    if (-not $Top) { return $false }
+    if ([string]$Top.parent -eq 'taskhostw.exe') { return $true }
+    return ([string]$Top.parent -eq 'svchost.exe' -and [string]$Top.parentCmd -match '\s-s\s+Schedule\b')
+}
+
+# Turns episodes into findings: one per culprit category (count, share of all
+# spikes, most frequent process) plus one for spikes started by scheduled
+# tasks. A Defender finding says whether on-demand scans or real-time
+# scanning dominate and names the folder Defender scanned most.
+function Get-TrapDiagnosis {
+    param($Episodes)
+    $findings = New-Object System.Collections.Generic.List[object]
+    # .Count, not @($Episodes).Count: PS 5.1 throws "Argument types do not
+    # match" for @() around a List[object] variable
+    $total = 0
+    if ($Episodes) { $total = $Episodes.Count }
+    if ($total -eq 0) { return }   # findings go to the pipeline: callers collect with @()
+    $groups = @{}; $scheduled = @{}; $scheduledCount = 0; $defScan = 0; $defFolder = ''
+    foreach ($ep in $Episodes) {
+        $c = Get-TrapCulprit $ep.Start
+        if ($c.Name -eq '*drivers*') { $cat = 'drivers' } else { $cat = Get-TrapCategory $c.Name }
+        if (-not $groups.ContainsKey($cat)) { $groups[$cat] = @{ Count = 0; Names = @{} } }
+        $groups[$cat].Count++
+        $groups[$cat].Names[$c.Name] = 1 + [int]$groups[$cat].Names[$c.Name]
+        $top0 = @($ep.Start.top | Where-Object { $_ }) | Select-Object -First 1
+        if (Test-TrapScheduled $top0) {
+            $scheduledCount++
+            $scheduled[[string]$top0.name] = 1 + [int]$scheduled[[string]$top0.name]
+        }
+        if ($cat -eq 'defender') {
+            if ($ep.Defender -eq 'scan') { $defScan++ }
+            $dt = $ep.Start.defenderTop
+            if ($dt -and @($dt.folders).Count) { $defFolder = [string]@($dt.folders)[0].path }
+        }
+    }
+    foreach ($cat in $groups.Keys) {
+        $g = $groups[$cat]
+        $key = 'diag_' + $cat; $detail = ''
+        if ($cat -eq 'defender') {
+            if ($defScan * 2 -ge $g.Count) { $key = 'diag_defender_scan' } else { $key = 'diag_defender_rt'; $detail = $defFolder }
+        }
+        $findings.Add(@{ Category = $cat; Key = $key; Count = $g.Count; Share = [int][Math]::Round(100.0 * $g.Count / $total)
+            Top = ($g.Names.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 1).Key; Detail = $detail })
+    }
+    if ($scheduledCount -gt 0) {
+        $findings.Add(@{ Category = 'scheduled'; Key = 'diag_scheduled'; Count = $scheduledCount; Share = [int][Math]::Round(100.0 * $scheduledCount / $total)
+            Top = ($scheduled.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 1).Key; Detail = '' })
+    }
+    return $findings | Sort-Object -Property @{ Expression = { $_.Count }; Descending = $true }, @{ Expression = { $_.Category } }
+}
+
+function Format-TrapFinding($Finding) {
+    $detail = [string]$Finding.Detail
+    if (-not $detail) { $detail = (T 'diagUnknownFolder') }
+    return [string]::Format((T $Finding.Key), $Finding.Share, (Get-TrapCulpritText $Finding.Top), $detail, $Finding.Count)
+}
+
+# Spike starts per hour of the day (local time) - periodic jobs stand out.
+function Get-TrapHourHistogram {
+    param($Episodes)
+    $h = New-Object int[] 24
+    foreach ($ep in $Episodes) { $h[(ConvertFrom-TrapTime ([string]$ep.Start.t)).Hour]++ }
+    return , $h
 }
 #endregion
 
@@ -2260,10 +2378,6 @@ $script:TrapProc = $null
 $script:TrapLastState = $null
 $script:TrapSig = $null
 
-function Get-TrapCulpritText([string]$Name) {
-    if ($Name -eq '*drivers*') { return (T 'trapDrivers') }
-    return $Name
-}
 
 function Set-TrapStateLabel($St) {
     if (-not $St.Installed)  { $key = 'trapStMissing';  $color = '#64748B' }

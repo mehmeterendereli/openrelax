@@ -147,5 +147,31 @@ $empty = ConvertTo-DefenderTop ([pscustomobject]@{ TopProcesses = $null; TopFile
 Check 'an empty report gives empty lists, not an error' (@($empty.processes).Count -eq 0 -and @($empty.folders).Count -eq 0)
 Check 'Defender top serializes as the JSONL contract expects' ((ConvertTo-Json -InputObject $top -Compress -Depth 5) -match '^\{"processes":\[\{"path":"C:\\\\x\\\\codex.exe","count":83,"ms":937\}\],"folders":\[')
 
+# --- diagnosis ---
+. (Get-FunctionSource $app 'Get-TrapCategory', 'Test-TrapScheduled', 'Get-TrapDiagnosis', 'Get-TrapHourHistogram', 'Format-TrapFinding', 'Get-TrapCulpritText')
+Check 'categories by process name' ((Get-TrapCategory 'MsMpEng.exe') -eq 'defender' -and (Get-TrapCategory 'TFTClient-Win64-Shipping.exe') -eq 'game' -and (Get-TrapCategory 'codex.exe') -eq 'devtools' -and (Get-TrapCategory 'msedge.exe') -eq 'browser' -and (Get-TrapCategory 'TiWorker.exe') -eq 'windows' -and (Get-TrapCategory 'foo.exe') -eq 'other')
+Check 'scheduled-task parents are recognised' ((Test-TrapScheduled ([pscustomobject]@{ parent = 'taskhostw.exe'; parentCmd = '' })) -and (Test-TrapScheduled ([pscustomobject]@{ parent = 'svchost.exe'; parentCmd = 'C:\WINDOWS\system32\svchost.exe -k netsvcs -p -s Schedule' })) -and -not (Test-TrapScheduled ([pscustomobject]@{ parent = 'explorer.exe'; parentCmd = '' })) -and -not (Test-TrapScheduled $null))
+$def = [pscustomobject]@{ folders = @([pscustomobject]@{ path = 'C:\u\.codex\sessions'; count = 12; ms = 95 }) }
+$ep = New-Object System.Collections.Generic.List[object]
+foreach ($i in 0..4) {
+    $s = New-Start ('2026-10-01T0{0}:00:00' -f $i) 'MsMpEng.exe' 70 -Defender 'realtime'
+    if ($i -eq 4) { $s | Add-Member -NotePropertyName defenderTop -NotePropertyValue $def }
+    $ep.Add(@{ Start = $s; Defender = 'realtime' })
+}
+foreach ($i in 5..7) { $ep.Add(@{ Start = (New-Start ('2026-10-01T{0:D2}:00:00' -f ($i + 9)) 'chrome.exe' 20 -Attributed 30); Defender = $null }) }
+$ep.Add(@{ Start = (New-Start '2026-10-01T15:00:00' 'codex.exe' 50 -Parent 'taskhostw.exe'); Defender = $null })
+$ep.Add(@{ Start = (New-Start '2026-10-01T15:30:00' 'codex.exe' 40); Defender = $null })
+$d = @(Get-TrapDiagnosis $ep)
+Check 'findings sorted by count with shares' ($d.Count -ge 4 -and $d[0].Category -eq 'defender' -and $d[0].Count -eq 5 -and $d[0].Share -eq 50 -and $d[1].Category -eq 'drivers' -and $d[1].Count -eq 3) (($d | ForEach-Object { '{0}:{1}' -f $_.Category, $_.Count }) -join ' ')
+Check 'real-time Defender finding names the most-scanned folder' ($d[0].Key -eq 'diag_defender_rt' -and $d[0].Detail -eq 'C:\u\.codex\sessions')
+Check 'scheduled finding counts task-started spikes' (@($d | Where-Object { $_.Category -eq 'scheduled' -and $_.Count -eq 1 -and $_.Top -eq 'codex.exe' }).Count -eq 1)
+Check 'finding text carries share, process, detail, count' ((Format-TrapFinding $d[0]) -eq 'diag_defender_rt|50|MsMpEng.exe|C:\u\.codex\sessions|5') (Format-TrapFinding $d[0])
+$scanEp = New-Object System.Collections.Generic.List[object]
+$scanEp.Add(@{ Start = (New-Start '2026-10-02T10:00:00' 'MsMpEng.exe' 80 -Defender 'scan'); Defender = 'scan' })
+Check 'scan-dominated Defender finding advises moving scans' ((@(Get-TrapDiagnosis $scanEp))[0].Key -eq 'diag_defender_scan')
+$h = Get-TrapHourHistogram $ep
+Check 'hour histogram has 24 buckets counting starts' ($h.Count -eq 24 -and $h[0] -eq 1 -and $h[15] -eq 3 -and (($h | Measure-Object -Sum).Sum) -eq 10) ($h -join ',')   # 15:00 = one chrome + two codex starts
+Check 'no episodes, no findings' (@(Get-TrapDiagnosis (New-Object System.Collections.Generic.List[object])).Count -eq 0)
+
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)
