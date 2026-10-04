@@ -33,3 +33,7 @@ jobs:
       - name: Unit tests
         shell: powershell
         run: .\tests\unit.ps1
+
+      - name: Engine stress (small tree)
+        shell: powershell
+        run: .\tests\engine-stress.ps1 -Dirs 300 -FilesPerDir 5

@@ -467,34 +467,101 @@ function Get-JunkCategories {
     return , $cats
 }
 
-# BudgetSec > 0 caps the walk: a %TEMP% filled by dev/AI tooling can hold
-# hundreds of thousands of folders and take minutes to enumerate. A capped scan
-# returns a lower bound (Partial) instead of stalling. Inside a worker, $Sync
-# (the task's param, visible through dynamic scope) gets a progress beat for
-# the watchdog; in the headless modes it is simply $null.
+# Walks a folder tree for the cleaning engine. Never enters reparse points
+# (junctions, symlinks), so nothing outside the tree can be counted or
+# deleted, and an unreadable folder is skipped instead of ending the walk.
+# Counts files last written before -Cutoff; with -Remove it deletes them
+# (read-only ones too; locked ones are skipped) and then removes the folders
+# left empty, deepest first. The time budget and the progress beat are
+# checked by elapsed time - per folder and every 2048 entries - not by file
+# count, so folders without files can neither overrun the budget nor starve
+# the watchdog. Inside a worker, $Sync is the task's shared hashtable
+# (visible through dynamic scope); in the headless modes it is $null.
+function Invoke-JunkWalk {
+    param(
+        [string]$Root,
+        [datetime]$Cutoff = [datetime]::MaxValue,
+        [switch]$Remove,
+        [int]$BudgetMs = 0,
+        [switch]$ByTopFolder
+    )
+    $r = @{ Size = [long]0; Count = [long]0; Dirs = [long]0; Partial = $false; Folders = @{} }
+    if (-not $Root -or -not [System.IO.Directory]::Exists($Root)) { return $r }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $nextBeat = [long]0; $sentCount = [long]0; $sentSize = [long]0; $n = 0
+    $stack = New-Object 'System.Collections.Generic.Stack[object]'
+    $stack.Push(@($Root, ''))
+    $folders = New-Object 'System.Collections.Generic.List[string]'
+    while ($stack.Count -gt 0) {
+        $item = $stack.Pop()
+        $dir = [string]$item[0]; $top = [string]$item[1]
+        $r.Dirs++
+        $ms = $sw.ElapsedMilliseconds
+        if ($BudgetMs -gt 0 -and $ms -gt $BudgetMs) { $r.Partial = $true; break }
+        if ($ms -ge $nextBeat -and $Sync) {
+            $nextBeat = $ms + 250
+            $Sync.Beat = [DateTime]::UtcNow; $Sync.Step = $dir; $Sync.WalkInfo = @($r.Dirs, $top)
+            if ($Remove) {
+                $Sync.CleanDone = [long]$Sync.CleanDone + ($r.Count - $sentCount)
+                $Sync.CleanBytes = [long]$Sync.CleanBytes + ($r.Size - $sentSize)
+                $sentCount = $r.Count; $sentSize = $r.Size
+            }
+        }
+        try { $entries = (New-Object System.IO.DirectoryInfo $dir).GetFileSystemInfos() } catch { continue }
+        foreach ($e in $entries) {
+            if ((++$n % 2048) -eq 0 -and $BudgetMs -gt 0 -and $sw.ElapsedMilliseconds -gt $BudgetMs) { $r.Partial = $true; break }
+            if ($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+            $t = $top
+            if ($e -is [System.IO.DirectoryInfo]) {
+                if (-not $t) { $t = $e.Name }
+                $stack.Push(@($e.FullName, $t))
+                if ($Remove) { $folders.Add($e.FullName) }
+                continue
+            }
+            if ($e.LastWriteTime -ge $Cutoff) { continue }
+            $len = $e.Length
+            if ($Remove) {
+                try {
+                    if ($e.IsReadOnly) { $e.IsReadOnly = $false }
+                    $e.Delete()
+                } catch { continue }   # locked or in use
+            }
+            $r.Size += $len; $r.Count++
+            if ($ByTopFolder) { $r.Folders[$t] = [long]$r.Folders[$t] + $len }
+        }
+        if ($r.Partial) { break }
+    }
+    if ($Remove) {
+        # Longer paths are deeper: children go before their parents; only empty ones go
+        foreach ($d in ($folders | Sort-Object -Property Length -Descending)) {
+            try { [System.IO.Directory]::Delete($d) } catch {}
+        }
+        if ($Sync) {
+            $Sync.CleanDone = [long]$Sync.CleanDone + ($r.Count - $sentCount)
+            $Sync.CleanBytes = [long]$Sync.CleanBytes + ($r.Size - $sentSize)
+        }
+    }
+    return $r
+}
+
+# BudgetSec > 0 caps the scan: a %TEMP% filled by dev/AI tooling can hold
+# hundreds of thousands of folders and take minutes to walk. A capped scan
+# returns a lower bound (Partial) instead of stalling.
 function Measure-JunkPaths {
     param($Paths, [bool]$IsAdmin, [int]$BudgetSec = 0)
-    $size = [long]0; $count = [long]0; $lockedSize = [long]0; $seen = [long]0; $partial = $false
+    $size = [long]0; $count = [long]0; $lockedSize = [long]0; $partial = $false
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($p in $Paths) {
-        $accessible = $IsAdmin -or (-not $p.Admin)
+        $left = 0
+        if ($BudgetSec -gt 0) {
+            $left = [int]($BudgetSec * 1000 - $sw.ElapsedMilliseconds)
+            if ($left -le 0) { $partial = $true; break }
+        }
         $cutoff = [datetime]::MaxValue
         if ($p.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$p.MinAgeHours) }
-        try {
-            # do/while($false) gives 'break' a loop to exit, which stops the pipeline
-            do {
-                Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    if ($_.LastWriteTime -lt $cutoff) {
-                        if ($accessible) { $size += $_.Length; $count++ } else { $lockedSize += $_.Length }
-                    }
-                    if ((++$seen % 500) -eq 0) {
-                        if ($Sync) { $Sync.Beat = [DateTime]::UtcNow; $Sync.Step = $_.DirectoryName }
-                        if ($BudgetSec -gt 0 -and $sw.Elapsed.TotalSeconds -gt $BudgetSec) { $partial = $true; break }
-                    }
-                }
-            } while ($false)
-        } catch {}
-        if ($partial) { break }
+        $w = Invoke-JunkWalk -Root $p.Path -Cutoff $cutoff -BudgetMs $left
+        if ($IsAdmin -or -not $p.Admin) { $size += $w.Size; $count += $w.Count } else { $lockedSize += $w.Size }
+        if ($w.Partial) { $partial = $true; break }
     }
     return @{ Size = $size; Count = $count; LockedSize = $lockedSize; Partial = $partial }
 }
@@ -522,31 +589,13 @@ function Get-RecycleBinInfo {
 
 function Remove-JunkPaths {
     param($Paths, [bool]$IsAdmin)
-    $bytes = [long]0; $count = [long]0; $seen = [long]0
+    $bytes = [long]0; $count = [long]0
     foreach ($p in $Paths) {
         if ($p.Admin -and -not $IsAdmin) { continue }
         $cutoff = [datetime]::MaxValue
         if ($p.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$p.MinAgeHours) }
-        # Streamed, not collected first: buffering and sorting millions of
-        # entries stalled cleaning of a large %TEMP% for minutes.
-        Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            if ((++$seen % 500) -eq 0 -and $Sync) { $Sync.Beat = [DateTime]::UtcNow }
-            if ($_.LastWriteTime -ge $cutoff) { return }
-            try {
-                $len = $_.Length
-                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
-                $bytes += $len; $count++
-            } catch {
-                # Locked or in-use file - skip silently
-            }
-        }
-        # Then drop folders left empty, deepest first. Directory.Delete only
-        # removes empty folders; reparse points (junctions) are left alone.
-        Get-ChildItem -LiteralPath $p.Path -Recurse -Directory -Force -ErrorAction SilentlyContinue |
-            ForEach-Object { if ((++$seen % 500) -eq 0 -and $Sync) { $Sync.Beat = [DateTime]::UtcNow }; $_ } |
-            Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-            Sort-Object -Property @{ Expression = { $_.FullName.Length } } -Descending |
-            ForEach-Object { try { [System.IO.Directory]::Delete($_.FullName) } catch {} }
+        $w = Invoke-JunkWalk -Root $p.Path -Cutoff $cutoff -Remove
+        $bytes += $w.Size; $count += $w.Count
     }
     return @{ Bytes = $bytes; Count = $count }
 }
@@ -616,7 +665,7 @@ function Invoke-RamTrim {
 # Serialized engine source, injected into every background runspace so the
 # worker and the UI share a single implementation.
 $script:EngineCode = ''
-foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Invoke-WindowsUpdateCacheCleanup', 'Invoke-RamTrim') {
+foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Invoke-JunkWalk', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Invoke-WindowsUpdateCacheCleanup', 'Invoke-RamTrim') {
     $script:EngineCode += "function $fnName {`n" + (Get-Command $fnName).Definition + "`n}`n"
 }
 #endregion

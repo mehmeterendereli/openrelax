@@ -60,5 +60,40 @@ $c = @(Get-TrapCulprits $eps)
 # $_.Count reads the 'Count' key; Measure-Object -Property Count would read Hashtable.Count
 Check 'culprit ranking counts every episode once' ((($c | ForEach-Object { $_.Count }) | Measure-Object -Sum).Sum -eq 4)
 
+# --- engine walker ---
+. (Get-FunctionSource $app 'Invoke-JunkWalk')
+$w = Join-Path $env:TEMP ('or-unit-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$old = (Get-Date).AddDays(-2)
+function New-OldFile([string]$P, [int]$Bytes = 100) {
+    [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $P))
+    [System.IO.File]::WriteAllBytes($P, (New-Object byte[] $Bytes))
+    [System.IO.File]::SetLastWriteTime($P, $old)
+}
+New-OldFile "$w\tree\a\f1.tmp" 100
+New-OldFile "$w\tree\a\b\f2.tmp" 50
+New-OldFile "$w\tree\root.tmp" 10
+New-OldFile "$w\tree\ro\readonly.tmp" 5
+[System.IO.File]::SetAttributes("$w\tree\ro\readonly.tmp", 'ReadOnly')
+[System.IO.File]::WriteAllText("$w\tree\young.tmp", 'new')
+New-OldFile "$w\outside\keep.tmp" 7
+New-Item -ItemType Junction -Path "$w\tree\link" -Target "$w\outside" | Out-Null
+$cut = (Get-Date).AddHours(-24)
+$m = Invoke-JunkWalk -Root "$w\tree" -Cutoff $cut -ByTopFolder
+Check 'walker counts old files only, not through junctions' ($m.Count -eq 4 -and $m.Size -eq 165) ("$($m.Count) files / $($m.Size) bytes")
+Check 'walker totals per first-level folder, root files under the empty key' ($m.Folders['a'] -eq 150 -and $m.Folders[''] -eq 10 -and $m.Folders['ro'] -eq 5)
+$Sync = [hashtable]::Synchronized(@{ CleanDone = [long]0; CleanBytes = [long]0 })
+$held = [System.IO.File]::Open("$w\tree\a\f1.tmp", 'Open', 'Read', 'None')
+try { $rm = Invoke-JunkWalk -Root "$w\tree" -Cutoff $cut -Remove } finally { $held.Dispose() }
+Check 'remove skips the held file and deletes read-only ones' ($rm.Count -eq 3 -and (Test-Path "$w\tree\a\f1.tmp") -and -not (Test-Path "$w\tree\ro")) ("$($rm.Count) removed")
+Check 'remove drops emptied folders, keeps young files and the junction target' (-not (Test-Path "$w\tree\a\b") -and (Test-Path "$w\tree\young.tmp") -and (Test-Path "$w\outside\keep.tmp") -and (Test-Path "$w\tree\link"))
+Check 'remove reports progress through $Sync' ($Sync.CleanDone -eq 3 -and $Sync.CleanBytes -eq $rm.Size -and $Sync.Beat) ("done $($Sync.CleanDone) bytes $($Sync.CleanBytes)")
+Remove-Variable Sync
+1..400 | ForEach-Object { [void][System.IO.Directory]::CreateDirectory("$w\dirs\d$_\e") }
+$b = Invoke-JunkWalk -Root "$w\dirs" -BudgetMs 1
+Check 'budget stops a folder-only tree (no files to count)' ($b.Partial -and $b.Dirs -lt 801) ("dirs $($b.Dirs) partial $($b.Partial)")
+Check 'missing root is an empty result, not an error' ((Invoke-JunkWalk -Root "$w\nope").Count -eq 0)
+[System.IO.Directory]::Delete("$w\tree\link")
+[System.IO.Directory]::Delete($w, $true)
+
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)

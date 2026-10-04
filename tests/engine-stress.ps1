@@ -25,7 +25,7 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
 # --- the engine, as injected into GUI workers ---
 $source = Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($source, [ref]$null, [ref]$null)
-$names = 'Format-Bytes', 'Measure-JunkPaths', 'Remove-JunkPaths'
+$names = 'Format-Bytes', 'Invoke-JunkWalk', 'Measure-JunkPaths', 'Remove-JunkPaths'
 $engine = ($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $names -contains $n.Name }, $true) |
     ForEach-Object { $_.Extent.Text }) -join "`n"
 . ([scriptblock]::Create($engine))
@@ -85,9 +85,10 @@ $m = Measure-JunkPaths -Paths @(@{ Path = $junk; Admin = $false; MinAgeHours = 2
 $measureSec = $sw.Elapsed.TotalSeconds
 Check 'measure counts every old file, skips young files and junction targets' (($m.Count -eq ($grid + $specials)) -or ($m.Count -eq ($grid + $specials + 1))) ('{0:N0} counted, {1:N0}(+1 long) expected, {2:N1} s' -f $m.Count, ($grid + $specials), $measureSec)
 Check 'unbounded measure is not partial' (-not $m.Partial)
+# A 1 ms budget is hit on any tree, so this holds for the small CI tree too
 $sw.Restart()
-$mb = Measure-JunkPaths -Paths @(@{ Path = $junk; Admin = $false; MinAgeHours = 24 }) -IsAdmin:$true -BudgetSec 1
-Check 'budgeted measure stops on time with Partial set' ($mb.Partial -and $sw.Elapsed.TotalSeconds -lt 4) ('{0:N1} s, {1:N0} files seen' -f $sw.Elapsed.TotalSeconds, $mb.Count)
+$wb = Invoke-JunkWalk -Root $junk -BudgetMs 1
+Check 'walker budget stops the walk early with Partial set' ($wb.Partial -and $wb.Count -lt ($grid + $specials) -and $sw.Elapsed.TotalSeconds -lt 2) ('{0:N0} files seen in {1:N2} s' -f $wb.Count, $sw.Elapsed.TotalSeconds)
 
 # --- remove in a worker runspace, with a file held open ---
 $held = [System.IO.File]::Open((Join-Path $junk 'locked\held.bin'), 'Open', 'Read', 'None')
