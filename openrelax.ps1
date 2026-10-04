@@ -23,6 +23,7 @@ function Get-DefaultSettings {
         autoBoost      = $false
         autoBoostLimit = 85
         closeToTray    = $true
+        trapNotify     = $true   # tray balloon when Fotokapan records a new spike
         runAtStartup   = $false
         weeklyClean    = $false
         categories     = @{
@@ -116,6 +117,9 @@ $script:Strings = @{
         settingsGeneral  = 'GENEL AYARLAR'
         settingsStats    = 'İSTATİSTİKLER'
         optCloseTray     = 'Kapatınca sistem tepsisine küçült'
+        optTrapNotify    = 'CPU sıçramalarını bildir'
+        trapBalloonTitle = 'OpenRelax · Fotokapan'
+        trapBalloon      = 'CPU sıçraması {0}: {1} (%{2})'
         optStartup       = 'Windows ile başlat'
         optWeekly        = 'Haftalık otomatik temizlik (Pazar 12:00)'
         language         = 'Dil:'
@@ -273,6 +277,9 @@ $script:Strings = @{
         settingsGeneral  = 'GENERAL SETTINGS'
         settingsStats    = 'STATISTICS'
         optCloseTray     = 'Minimize to tray on close'
+        optTrapNotify    = 'Notify on CPU spikes'
+        trapBalloonTitle = 'OpenRelax · Spike Trap'
+        trapBalloon      = 'CPU spike at {0}: {1} ({2}%)'
         optStartup       = 'Run at Windows startup'
         optWeekly        = 'Weekly automatic cleanup (Sun 12:00)'
         language         = 'Language:'
@@ -1246,6 +1253,24 @@ function Save-TrapReport([string]$Text, [string]$Folder = (Join-Path ([Environme
     [System.IO.File]::WriteAllText($path, $Text, (New-Object System.Text.UTF8Encoding $false))
     return $path
 }
+
+# Decides whether the newest spike should be announced: never the history
+# found on the first look, never the same spike twice, at most one balloon
+# per 15 minutes (the baseline still advances, so nothing queues up).
+function Get-TrapNotification {
+    param($Records, $LastT, [datetime]$LastAt, [datetime]$Now)
+    $last = $null
+    $n = 0
+    if ($Records) { $n = $Records.Count }
+    for ($i = $n - 1; $i -ge 0; $i--) {
+        if ([string]$Records[$i].kind -eq 'start') { $last = $Records[$i]; break }
+    }
+    if (-not $last) { return @{ Show = $false; LastT = $LastT; Record = $null } }
+    $t = [string]$last.t
+    if ($null -eq $LastT) { return @{ Show = $false; LastT = $t; Record = $null } }
+    if ($t -le [string]$LastT) { return @{ Show = $false; LastT = $LastT; Record = $null } }
+    return @{ Show = (($Now - $LastAt).TotalMinutes -ge 15); LastT = $t; Record = $last }
+}
 #endregion
 
 #region 6. Headless modes (-AutoClean / -SelfTest) - no GUI is loaded
@@ -2163,7 +2188,7 @@ foreach ($cat in (Get-JunkCategories)) {
     $script:CatAdminOnly[$cat.Key] = $allAdmin
 }
 
-$genCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 4)) (New-Object System.Drawing.Size(312, 230))
+$genCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 4)) (New-Object System.Drawing.Size(312, 250))
 
 $genTitle = New-Object System.Windows.Forms.Label
 $genTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
@@ -2193,6 +2218,10 @@ $script:OptionChangedHandler = {
             $r = Set-WeeklyTask $sender.Checked
             if ($r.Ok) { Write-Log (T $r.Key) 'success' }
             else { Write-Log ([string]::Format((T 'logTaskError'), $r.Error)) 'error' }
+        }
+        'trapnotify' {
+            $script:Settings.trapNotify = $sender.Checked
+            Save-Settings
         }
     }
 }
@@ -2230,15 +2259,26 @@ $chkWeekly.Checked = [bool]$script:Settings.weeklyClean
 $chkWeekly.add_CheckedChanged($script:OptionChangedHandler)
 $genCard.Controls.Add($chkWeekly)
 
+$chkTrapNotify = New-Object System.Windows.Forms.CheckBox
+$chkTrapNotify.Location = New-Object System.Drawing.Point(14, 128)
+$chkTrapNotify.Size = New-Object System.Drawing.Size(284, 22)
+$chkTrapNotify.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$chkTrapNotify.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
+$chkTrapNotify.BackColor = [System.Drawing.Color]::Transparent
+$chkTrapNotify.Tag = 'trapnotify'
+$chkTrapNotify.Checked = [bool]$script:Settings.trapNotify
+$chkTrapNotify.add_CheckedChanged($script:OptionChangedHandler)
+$genCard.Controls.Add($chkTrapNotify)
+
 $lblLang = New-Object System.Windows.Forms.Label
 $lblLang.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
 $lblLang.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$lblLang.Location = New-Object System.Drawing.Point(14, 134)
+$lblLang.Location = New-Object System.Drawing.Point(14, 164)
 $lblLang.Size = New-Object System.Drawing.Size(90, 20)
 $genCard.Controls.Add($lblLang)
 
 $cmbLang = New-Object System.Windows.Forms.ComboBox
-$cmbLang.Location = New-Object System.Drawing.Point(110, 131)
+$cmbLang.Location = New-Object System.Drawing.Point(110, 161)
 $cmbLang.Size = New-Object System.Drawing.Size(120, 22)
 $cmbLang.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
 $cmbLang.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
@@ -2259,7 +2299,7 @@ $cmbLang.add_SelectedIndexChanged({
 
 $btnElevate = New-Object System.Windows.Forms.Button
 $btnElevate.Size = New-Object System.Drawing.Size(284, 34)
-$btnElevate.Location = New-Object System.Drawing.Point(14, 172)
+$btnElevate.Location = New-Object System.Drawing.Point(14, 202)
 $btnElevate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnElevate.FlatAppearance.BorderColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
 $btnElevate.FlatAppearance.BorderSize = 1
@@ -2283,7 +2323,7 @@ $btnElevate.add_Click({
 
 Register-CardHover $genCard
 
-$statCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 250)) (New-Object System.Drawing.Size(312, 154))
+$statCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 262)) (New-Object System.Drawing.Size(312, 142))
 
 $statTitle = New-Object System.Windows.Forms.Label
 $statTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
@@ -2702,6 +2742,24 @@ function Complete-TrapAction {
     Update-TrapView
 }
 
+$script:TrapNotifiedT = $null
+$script:TrapNotifiedAt = [datetime]::MinValue
+
+# Called by the monitoring timer every 30 s while trapNotify is on.
+function Invoke-TrapNotify {
+    try {
+        $n = Get-TrapNotification (Read-TrapRecords -Days 1) $script:TrapNotifiedT $script:TrapNotifiedAt (Get-Date)
+        $script:TrapNotifiedT = $n.LastT
+        if (-not $n.Show) { return }
+        $script:TrapNotifiedAt = Get-Date
+        $c = Get-TrapCulprit $n.Record
+        $script:BalloonIsTrap = $true
+        $notifyIcon.BalloonTipTitle = (T 'trapBalloonTitle')
+        $notifyIcon.BalloonTipText = [string]::Format((T 'trapBalloon'), (ConvertFrom-TrapTime $n.Record.t).ToString('HH:mm'), (Get-TrapCulpritText $c.Name), ('{0:N0}' -f $c.Pct))
+        $notifyIcon.ShowBalloonTip(5000)
+    } catch {}
+}
+
 $btnTrapInstall.add_Click({ Start-TrapAction 'Install' })
 $btnTrapRemove.add_Click({
     $answer = [System.Windows.Forms.MessageBox]::Show((T 'trapConfirmRemove'), 'OpenRelax',
@@ -2750,6 +2808,7 @@ function Hide-ToTray {
     $form.Hide()
     if (-not $script:BalloonShown) {
         $script:BalloonShown = $true
+        $script:BalloonIsTrap = $false   # this balloon is the tray hint, not a spike
         $notifyIcon.BalloonTipTitle = "OpenRelax"
         $notifyIcon.BalloonTipText = (T 'trayBalloon')
         $notifyIcon.ShowBalloonTip(2500)
@@ -2757,6 +2816,14 @@ function Hide-ToTray {
 }
 
 $notifyIcon.add_DoubleClick({ Show-MainWindow })
+# A spike balloon leads straight to the Fotokapan tab
+$notifyIcon.add_BalloonTipClicked({
+    if ($script:BalloonIsTrap) {
+        $script:BalloonIsTrap = $false
+        Show-MainWindow
+        Show-View 'trap'
+    }
+})
 $miShow.add_Click({ Show-MainWindow })
 $miTrap.add_Click({ Show-MainWindow; Show-View 'trap' })
 $miClean.add_Click({ Show-MainWindow; $btnOneClick.PerformClick() })
@@ -3024,6 +3091,8 @@ if ($script:StressCycles -gt 0) {
             $cycle = [int][Math]::Floor($s / 4)
             if ($cycle -lt $script:StressCycles) {
                 $navButtons[$s % 4].PerformClick()
+                # The settings view is up: snapshot it once per language
+                if (($s % 4) -eq 1 -and $cycle -lt 2) { Save-StressSnapshot ('stress-settings-{0}.png' -f $script:Settings.language) }
                 if (($s % 4) -eq 3) {
                     # The Fotokapan view is up: switch its page (summary twice, then
                     # records twice - the language alternates per cycle) and snapshot
@@ -3203,6 +3272,7 @@ function Apply-Language {
     $genTitle.Text = (T 'settingsGeneral')
     $statTitle.Text = (T 'settingsStats')
     $chkTray.Text = (T 'optCloseTray')
+    $chkTrapNotify.Text = (T 'optTrapNotify')
     $chkStartup.Text = (T 'optStartup')
     $chkWeekly.Text = (T 'optWeekly')
     $lblLang.Text = (T 'language')
@@ -3285,6 +3355,9 @@ $timer.add_Tick({
         }
         if ($script:ActiveView -eq 'trap' -and $form.Visible -and ($script:TickCount % 10) -eq 0) {
             Update-TrapView
+        }
+        if (($script:TickCount % 30) -eq 15 -and $script:Settings.trapNotify) {
+            Invoke-TrapNotify
         }
 
         if ($script:pulse) {

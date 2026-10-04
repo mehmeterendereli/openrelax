@@ -195,5 +195,24 @@ $path = Save-TrapReport $md $repDir
 Check 'report saved as UTF-8 markdown, content unchanged' ((Test-Path -LiteralPath $path) -and $path -like '*.md' -and [System.IO.File]::ReadAllText($path) -eq $md)
 Remove-Item -LiteralPath $repDir -Recurse -Force
 
+# --- notifications ---
+. (Get-FunctionSource $app 'Get-TrapNotification')
+$nr = New-Object System.Collections.Generic.List[object]   # Read-TrapRecords returns a List
+$nr.Add((New-Start '2026-10-01T09:00:00' 'codex.exe' 40))
+$now = Get-Date '2026-10-01T09:01:00'
+$n1 = Get-TrapNotification $nr $null ([datetime]::MinValue) $now
+Check 'first look sets the baseline without announcing history' (-not $n1.Show -and $n1.LastT -eq '2026-10-01T09:00:00')
+$nr.Add((New-Start '2026-10-01T09:05:00' 'java.exe' 50))
+$nr.Add((New-End '2026-10-01T09:05:10'))
+$n2 = Get-TrapNotification $nr $n1.LastT ([datetime]::MinValue) $now
+Check 'a new spike is announced (the newest start, not the end record)' ($n2.Show -and $n2.Record.top[0].name -eq 'java.exe' -and $n2.LastT -eq '2026-10-01T09:05:00')
+$n3 = Get-TrapNotification $nr $n2.LastT ([datetime]::MinValue) $now
+Check 'the same spike is not announced twice' (-not $n3.Show)
+$nr.Add((New-Start '2026-10-01T09:07:00' 'node.exe' 30))
+$n4 = Get-TrapNotification $nr $n2.LastT $now.AddMinutes(-5) $now
+Check 'at most one balloon per 15 minutes, the baseline still advances' (-not $n4.Show -and $n4.LastT -eq '2026-10-01T09:07:00')
+$n5 = Get-TrapNotification (New-Object System.Collections.Generic.List[object]) $null ([datetime]::MinValue) $now
+Check 'no records, nothing to announce' (-not $n5.Show -and $null -eq $n5.LastT)
+
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)
