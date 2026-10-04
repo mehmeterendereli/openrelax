@@ -29,3 +29,7 @@ jobs:
       - name: Verify parser, service-state guard and read-only self-test
         shell: powershell
         run: .\tests\verify.ps1
+
+      - name: Unit tests
+        shell: powershell
+        run: .\tests\unit.ps1
