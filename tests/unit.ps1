@@ -95,5 +95,17 @@ Check 'missing root is an empty result, not an error' ((Invoke-JunkWalk -Root "$
 [System.IO.Directory]::Delete("$w\tree\link")
 [System.IO.Directory]::Delete($w, $true)
 
+# --- categories and settings ---
+. (Get-FunctionSource $app 'Get-JunkCategories', 'Get-DefaultSettings')
+# No @(): the function returns its array with the unary comma, and @() would
+# wrap that whole array as a single element
+$cats = Get-JunkCategories
+$dev = @($cats | Where-Object { $_.Key -eq 'devcache' })
+Check 'devcache category exists and the recycle bin stays last' ($dev.Count -eq 1 -and $cats[$cats.Count - 1].Key -eq 'recycle')
+$devPaths = @()
+if ($dev.Count) { $devPaths = @($dev[0].Paths | Where-Object { $_ }) }
+Check 'devcache lists only existing, user-level folders under the 24 h rule' ($dev.Count -eq 1 -and @($devPaths | Where-Object { -not (Test-Path -LiteralPath $_.Path) -or $_.Admin -or $_.MinAgeHours -ne 24 }).Count -eq 0)
+Check 'devcache is off by default' ((Get-DefaultSettings).categories.devcache -eq $false)
+
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)

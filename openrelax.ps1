@@ -33,6 +33,7 @@ function Get-DefaultSettings {
             wer      = $true
             wu       = $false   # off by default: requires stopping Windows Update service
             gpusetup = $true
+            devcache = $false   # opt-in: a cleared cache costs a re-download
             recycle  = $true
         }
         stats          = @{
@@ -109,6 +110,7 @@ $script:Strings = @{
         cat_wu           = 'Windows Update Önbelleği'
         cat_gpusetup     = 'GPU Kurulum Kalıntıları'
         cat_recycle      = 'Geri Dönüşüm Kutusu'
+        cat_devcache     = 'Geliştirici Önbellekleri (npm, pip, NuGet, Yarn)'
         adminRequired    = '(yönetici gerekli)'
         settingsCats     = 'TEMİZLİK KATEGORİLERİ'
         settingsGeneral  = 'GENEL AYARLAR'
@@ -240,6 +242,7 @@ $script:Strings = @{
         cat_wu           = 'Windows Update Cache'
         cat_gpusetup     = 'GPU Installer Leftovers'
         cat_recycle      = 'Recycle Bin'
+        cat_devcache     = 'Developer Caches (npm, pip, NuGet, Yarn)'
         adminRequired    = '(admin required)'
         settingsCats     = 'CLEANUP CATEGORIES'
         settingsGeneral  = 'GENERAL SETTINGS'
@@ -467,6 +470,18 @@ function Get-JunkCategories {
         if (Test-Path $c) { $p += @{ Path = $c; Admin = $true } }
     }
     $cats += @{ Key = 'gpusetup'; Paths = $p }
+
+    # Developer package caches (opt-in): npm, pip, NuGet and Yarn re-download on demand
+    $p = @()
+    foreach ($c in @(
+        (Join-Path $env:LOCALAPPDATA 'npm-cache\_cacache'),
+        (Join-Path $env:LOCALAPPDATA 'pip\Cache'),
+        (Join-Path $env:LOCALAPPDATA 'NuGet\v3-cache'),
+        (Join-Path $env:LOCALAPPDATA 'Yarn\Cache')
+    )) {
+        if (Test-Path $c) { $p += @{ Path = $c; Admin = $false; MinAgeHours = 24 } }
+    }
+    $cats += @{ Key = 'devcache'; Paths = $p }
 
     # Recycle Bin (handled specially via Shell COM / Clear-RecycleBin)
     $cats += @{ Key = 'recycle'; Paths = @() }
@@ -1874,7 +1889,7 @@ $script:CategoryChangedHandler = {
     Save-Settings
 }
 
-$catKeys = @('temp', 'browser', 'discord', 'shader', 'wer', 'wu', 'gpusetup', 'recycle')
+$catKeys = @('temp', 'browser', 'discord', 'shader', 'wer', 'wu', 'gpusetup', 'devcache', 'recycle')
 $catY = 38
 foreach ($catKey in $catKeys) {
     $chk = New-Object System.Windows.Forms.CheckBox
@@ -1888,7 +1903,7 @@ foreach ($catKey in $catKeys) {
     $chk.add_CheckedChanged($script:CategoryChangedHandler)
     $catCard.Controls.Add($chk)
     $script:CatChecks[$catKey] = $chk
-    $catY += 42
+    $catY += 38   # nine rows fit the 400 px card
 }
 Register-CardHover $catCard
 
