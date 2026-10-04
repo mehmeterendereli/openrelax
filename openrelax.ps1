@@ -153,6 +153,14 @@ $script:Strings = @{
         trapDiagTitle    = 'TEŞHİS · SON 7 GÜN'
         trapHoursTitle   = 'SAATE GÖRE DAĞILIM'
         trapNoteScheduled = 'zamanlanmış görev'
+        btnTrapExport    = 'Raporu kaydet'
+        reportTitle      = 'OpenRelax Fotokapan raporu'
+        reportGenerated  = 'Oluşturma: {0} · OpenRelax {1}'
+        reportStatus     = 'Durum: {0} · eşik %{1}'
+        reportDiagnosis  = 'Teşhis (son 7 gün)'
+        reportTop        = 'En sık sorumlular'
+        reportRecent     = 'Sıçramalar'
+        logTrapReportSaved = 'Rapor kaydedildi: {0}'
         colProcess       = 'Süreç'
         colSpikes        = 'Sıçrama'
         colAvg           = 'Ort. pay'
@@ -302,6 +310,14 @@ $script:Strings = @{
         trapDiagTitle    = 'DIAGNOSIS · LAST 7 DAYS'
         trapHoursTitle   = 'BY HOUR OF DAY'
         trapNoteScheduled = 'scheduled task'
+        btnTrapExport    = 'Save report'
+        reportTitle      = 'OpenRelax Spike Trap report'
+        reportGenerated  = 'Generated {0} · OpenRelax {1}'
+        reportStatus     = 'Status: {0} · threshold {1}%'
+        reportDiagnosis  = 'Diagnosis (last 7 days)'
+        reportTop        = 'Top culprits'
+        reportRecent     = 'Spikes'
+        logTrapReportSaved = 'Report saved: {0}'
         colProcess       = 'Process'
         colSpikes        = 'Spikes'
         colAvg           = 'Avg share'
@@ -1177,6 +1193,58 @@ function Get-TrapHourHistogram {
     $h = New-Object int[] 24
     foreach ($ep in $Episodes) { $h[(ConvertFrom-TrapTime ([string]$ep.Start.t)).Hour]++ }
     return , $h
+}
+
+# Markdown summary of the last 7 days for sharing: status, diagnosis, the
+# culprit table and every spike. Cells escape '|' so names cannot break rows.
+function Format-TrapReport($State, $Episodes) {
+    $esc = { param($s) ([string]$s) -replace '\|', '\|' }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('# ' + (T 'reportTitle'))
+    [void]$sb.AppendLine()
+    [void]$sb.AppendLine([string]::Format((T 'reportGenerated'), (Get-Date).ToString('yyyy-MM-dd HH:mm'), $script:AppVersion))
+    $stateKey = 'trapStMissing'
+    if ($State.Installed) {
+        if ($State.Insecure) { $stateKey = 'trapStInsecure' }
+        elseif ($State.Running) { $stateKey = 'trapStRunning' }
+        else { $stateKey = 'trapStStopped' }
+    }
+    [void]$sb.AppendLine([string]::Format((T 'reportStatus'), (T $stateKey), $State.Threshold))
+    [void]$sb.AppendLine()
+    [void]$sb.AppendLine('## ' + (T 'reportDiagnosis'))
+    $findings = @(Get-TrapDiagnosis $Episodes)
+    if (-not $findings.Count) { [void]$sb.AppendLine('- ' + (T 'diag_none')) }
+    foreach ($f in $findings) { [void]$sb.AppendLine('- ' + (Format-TrapFinding $f)) }
+    [void]$sb.AppendLine()
+    [void]$sb.AppendLine('## ' + (T 'reportTop'))
+    [void]$sb.AppendLine(('| {0} | {1} | {2} | {3} |' -f (T 'colProcess'), (T 'colSpikes'), (T 'colAvg'), (T 'colLast')))
+    [void]$sb.AppendLine('|---|---:|---:|---|')
+    foreach ($c in (Get-TrapCulprits $Episodes)) {
+        [void]$sb.AppendLine(('| {0} | {1} | {2:N0}% | {3} |' -f (& $esc (Get-TrapCulpritText $c.Name)), $c.Count, ($c.Sum / $c.Count), (ConvertFrom-TrapTime $c.Last).ToString('dd.MM HH:mm')))
+    }
+    [void]$sb.AppendLine()
+    [void]$sb.AppendLine('## ' + (T 'reportRecent'))
+    [void]$sb.AppendLine(('| {0} | {1} | {2} | {3} |' -f (T 'colTime'), (T 'colDur'), (T 'colPeak'), (T 'colCulprit')))
+    [void]$sb.AppendLine('|---|---:|---:|---|')
+    $n = 0
+    if ($Episodes) { $n = $Episodes.Count }
+    for ($i = $n - 1; $i -ge 0; $i--) {
+        $ep = $Episodes[$i]
+        $c = Get-TrapCulprit $ep.Start
+        $dur = (T 'trapCut')
+        if ($null -ne $ep.Duration) { $dur = [string]::Format((T 'trapSec'), $ep.Duration) }
+        $peak = ''
+        if ($null -ne $ep.Peak) { $peak = '{0}%' -f $ep.Peak }
+        [void]$sb.AppendLine(('| {0} | {1} | {2} | {3} {4:N0}% |' -f (ConvertFrom-TrapTime $ep.Start.t).ToString('dd.MM HH:mm'), $dur, $peak, (& $esc (Get-TrapCulpritText $c.Name)), $c.Pct))
+    }
+    return $sb.ToString()
+}
+
+function Save-TrapReport([string]$Text, [string]$Folder = (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'OpenRelax')) {
+    New-Item -ItemType Directory -Force -Path $Folder | Out-Null
+    $path = Join-Path $Folder ('fotokapan-rapor-{0:yyyyMMdd-HHmmss}.md' -f (Get-Date))
+    [System.IO.File]::WriteAllText($path, $Text, (New-Object System.Text.UTF8Encoding $false))
+    return $path
 }
 #endregion
 
@@ -2458,6 +2526,8 @@ Register-CardHover $trapTopCard
 $trapRecentCard = Create-Card $trapPageRecords (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(644, 306))
 $trapRecentTitle = New-TrapLabel $trapRecentCard 12 8 7.5 $true '#94A3B8'
 $lvTrapRecent = New-TrapList $trapRecentCard 12 36 620 262 @(110, 64, 56, 246, 110)
+$btnTrapExport = New-TrapButton $trapRecentCard 528 5 '#3B82F6'
+$btnTrapExport.Size = New-Object System.Drawing.Size(104, 26)
 Register-CardHover $trapRecentCard
 
 function Show-TrapPage([string]$Page) {
@@ -2637,6 +2707,16 @@ $btnTrapRemove.add_Click({
     $answer = [System.Windows.Forms.MessageBox]::Show((T 'trapConfirmRemove'), 'OpenRelax',
         [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Start-TrapAction 'Uninstall' }
+})
+$btnTrapExport.add_Click({
+    try {
+        $path = Save-TrapReport (Format-TrapReport (Get-TrapState) (Get-TrapEpisodes (Read-TrapRecords)))
+        Write-Log ([string]::Format((T 'logTrapReportSaved'), $path)) 'success'
+        # .md may have no associated app: fall back to Notepad
+        try { Start-Process -FilePath $path } catch { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $path) }
+    } catch {
+        Write-Log ([string]::Format((T 'logError'), $_.Exception.Message)) 'error'
+    }
 })
 $btnTrapLog.add_Click({
     $log = Get-ChildItem -LiteralPath $script:TrapDir -Filter 'fotokapan-*.log' -ErrorAction SilentlyContinue |
@@ -2951,6 +3031,10 @@ if ($script:StressCycles -gt 0) {
                     $page = @('summary', 'summary', 'records', 'records')[$cycle % 4]
                     Show-TrapPage $page
                     if ($cycle -lt 4) { Save-StressSnapshot ('stress-trap-{0}-{1}.png' -f $page, $script:Settings.language) }
+                    # The report export path with real strings, written next to the report (not to Documents)
+                    if ($cycle -eq 2 -and $script:StressReport) {
+                        [void](Save-TrapReport (Format-TrapReport $script:TrapLastState (Get-TrapEpisodes (Read-TrapRecords))) (Split-Path -Parent $script:StressReport))
+                    }
                     if ($script:Settings.language -eq 'en') { $script:Settings.language = 'tr' } else { $script:Settings.language = 'en' }
                     Apply-Language
                     if (-not $script:Sync.Busy -and ($cycle % 3) -eq 0) { Start-ScanTask; $script:StressScans++ }
@@ -3143,6 +3227,7 @@ function Apply-Language {
     $trapHoursTitle.Text = (T 'trapHoursTitle')
     $btnTrapPageSummary.Text = (T 'trapPageSummary')
     $btnTrapPageRecords.Text = (T 'trapPageRecords')
+    $btnTrapExport.Text = (T 'btnTrapExport')
     $btnTrapInstall.Text = (T 'btnTrapInstall')
     $btnTrapRemove.Text = (T 'btnTrapRemove')
     $btnTrapLog.Text = (T 'btnTrapLog')

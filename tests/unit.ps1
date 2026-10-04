@@ -37,8 +37,14 @@ function New-End([string]$T, [int]$Sec = 10, [int]$Peak = 95) {
     return [pscustomobject]@{ t = $T; kind = 'end'; durationSec = $Sec; peak = $Peak }
 }
 
-# Localization stub: the key plus its format slots, so tests assert structure, not wording
-function T([string]$Key) { return $Key + '|{0}|{1}|{2}|{3}' }
+# Localization stub: the key plus its format slots, so tests assert structure,
+# not wording. Keys used as format strings with fewer arguments get fewer slots.
+$StubSlots = @{ reportGenerated = 2; reportStatus = 2; trapSec = 1 }
+function T([string]$Key) {
+    $n = 4
+    if ($StubSlots.ContainsKey($Key)) { $n = $StubSlots[$Key] }
+    return $Key + (-join (0..($n - 1) | ForEach-Object { '|{' + $_ + '}' }))
+}
 
 # --- Fotokapan episodes and culprits ---
 . (Get-FunctionSource $app 'Get-TrapEpisodes', 'Get-TrapCulprit', 'Get-TrapCulprits', 'ConvertFrom-TrapTime')
@@ -172,6 +178,22 @@ Check 'scan-dominated Defender finding advises moving scans' ((@(Get-TrapDiagnos
 $h = Get-TrapHourHistogram $ep
 Check 'hour histogram has 24 buckets counting starts' ($h.Count -eq 24 -and $h[0] -eq 1 -and $h[15] -eq 3 -and (($h | Measure-Object -Sum).Sum) -eq 10) ($h -join ',')   # 15:00 = one chrome + two codex starts
 Check 'no episodes, no findings' (@(Get-TrapDiagnosis (New-Object System.Collections.Generic.List[object])).Count -eq 0)
+
+# --- report ---
+. (Get-FunctionSource $app 'Format-TrapReport', 'Save-TrapReport')
+$script:AppVersion = '2.2'
+$st = @{ Installed = $true; Running = $true; Insecure = $false; Outdated = $false; Threshold = 85; Beat = (Get-Date '2026-10-01T16:00:00') }
+$md = Format-TrapReport $st $ep
+Check 'report has title, diagnosis, culprit and spike sections' ($md -match '(?m)^# reportTitle' -and $md -match '(?m)^## reportDiagnosis' -and $md -match '(?m)^## reportTop' -and $md -match '(?m)^## reportRecent')
+Check 'report lists every episode once' (([regex]::Matches($md, '(?m)^\| 01\.10 ')).Count -eq 10) ("rows: $(([regex]::Matches($md, '(?m)^\| 01\.10 ')).Count)")
+Check 'report states the trap status' ($md -match 'reportStatus\|trapStRunning\S*\|85')   # the stub appends slots to every key
+$pipeEp = New-Object System.Collections.Generic.List[object]
+$pipeEp.Add(@{ Start = (New-Start '2026-10-03T10:00:00' 'a|b.exe' 50); Defender = $null; Duration = 5; Peak = 90 })
+Check 'pipes in process names cannot break table rows' ((Format-TrapReport $st $pipeEp) -match 'a\\\|b\.exe')
+$repDir = Join-Path $env:TEMP ('or-report-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+$path = Save-TrapReport $md $repDir
+Check 'report saved as UTF-8 markdown, content unchanged' ((Test-Path -LiteralPath $path) -and $path -like '*.md' -and [System.IO.File]::ReadAllText($path) -eq $md)
+Remove-Item -LiteralPath $repDir -Recurse -Force
 
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)

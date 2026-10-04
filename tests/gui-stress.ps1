@@ -90,6 +90,12 @@ if (Test-Path -LiteralPath $report) {
         Check 'junk scans ran in the worker alongside the UI' ($r.scans -ge 2) ('{0} scans' -f $r.scans)
     }
     Check 'no worker left running at exit' (-not $r.busyAtEnd)
+    if ($Cycles -ge 3) {
+        $md = Get-ChildItem -LiteralPath $Work -Filter 'fotokapan-rapor-*.md' | Select-Object -First 1
+        $mdText = ''
+        if ($md) { $mdText = [System.IO.File]::ReadAllText($md.FullName) }
+        Check 'report export renders with the real strings' ($md -and $mdText -match '(?m)^# OpenRelax (Fotokapan raporu|Spike Trap report)' -and ([regex]::Matches($mdText, '(?m)^\| \d\d\.\d\d ')).Count -ge 30) ($(if ($md) { $md.Name }))
+    }
     if ($WithDisk) {
         Check 'disk analysis ran through the real button and filled the list' ($r.diskRan -and $r.diskItems -gt 0) ('{0} folders listed' -f $r.diskItems)
     }
