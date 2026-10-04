@@ -1,12 +1,15 @@
-﻿# OpenRelax PC Care v2.0 - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care v2.1 LTS - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
+# Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
+#                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
 param(
     [switch]$AutoClean,
     [switch]$StartMinimized,
     [switch]$SelfTest
 )
 
-$script:AppVersion   = '2.0'
+$script:AppVersion   = '2.1'
+$script:AppEdition   = 'LTS'
 $script:ScriptPath   = $PSCommandPath
 $script:SettingsDir  = Join-Path $env:APPDATA 'OpenRelax'
 $script:SettingsFile = Join-Path $script:SettingsDir 'settings.json'
@@ -126,6 +129,45 @@ $script:Strings = @{
         trayShow         = 'Göster'
         trayClean        = 'Bakım Yap'
         trayExit         = 'Çıkış'
+        trayTrap         = 'Fotokapan'
+        navTrap          = 'Fotokapan'
+        trapTitle        = 'FOTOKAPAN · CPU SIÇRAMA KAYDEDİCİ'
+        trapStRunning    = 'Çalışıyor'
+        trapStStopped    = 'Durmuş'
+        trapStMissing    = 'Kurulu değil'
+        trapStUpdate     = 'Güncelleme var'
+        trapDetail       = 'Son kontrol {0} · eşik %{1} · bu açılışta {2} sıçrama'
+        trapDetailNone   = 'Kurulunca CPU %85 üstünde kaldığında sorumluları kaydeder; arayüz kapalıyken de çalışır.'
+        btnTrapInstall   = 'Kur / Güncelle'
+        btnTrapRemove    = 'Kaldır'
+        btnTrapLog       = 'Log''u aç'
+        trapTopTitle     = 'EN SIK SORUMLULAR · SON 7 GÜN'
+        trapRecentTitle  = 'SON SIÇRAMALAR'
+        colProcess       = 'Süreç'
+        colSpikes        = 'Sıçrama'
+        colAvg           = 'Ort. pay'
+        colLast          = 'Son'
+        colTime          = 'Zaman'
+        colDur           = 'Süre'
+        colPeak          = 'Tepe'
+        colCulprit       = 'Sorumlu'
+        colNote          = 'Not'
+        trapDrivers      = 'Sürücüler (kesme/DPC)'
+        trapNoteScan     = 'Defender taraması'
+        trapNoteRealtime = 'Defender gerçek zamanlı'
+        trapCut          = 'kesildi'
+        trapOngoing      = 'sürüyor'
+        trapSec          = '{0} sn'
+        trapConfirmRemove = 'Fotokapan kaldırılsın mı? Kayıtlar silinmez.'
+        trapNoLog        = 'Henüz fotokapan logu yok.'
+        logTrapInstallStart = 'Fotokapan kuruluyor...'
+        logTrapRemoveStart  = 'Fotokapan kaldırılıyor...'
+        logTrapInstalled = 'Fotokapan kuruldu ve çalışıyor.'
+        logTrapRemoved   = 'Fotokapan kaldırıldı (kayıtlar duruyor).'
+        logTrapFailed    = 'Fotokapan işlemi başarısız (çıkış kodu {0}).'
+        logTrapCancelled = 'Yönetici izni verilmedi, işlem iptal edildi.'
+        logTrapNoScript  = 'fotokapan.ps1 OpenRelax klasöründe bulunamadı.'
+        diskProgress     = 'Taranıyor {0}/{1}: {2}'
         trayBalloon      = 'OpenRelax arka planda çalışmaya devam ediyor. Çıkmak için tepsi simgesine sağ tıklayın.'
         logStart         = 'Sistem taraması başlatıldı...'
         logAdminOn       = 'Yönetici yetkileri aktif (Tam Sistem Temizliği).'
@@ -146,6 +188,7 @@ $script:Strings = @{
         logMaintStart    = 'Tek Tık Bakım başlatıldı...'
         logError         = 'Hata: {0}'
         logBusy          = 'Devam eden bir işlem var, lütfen bekleyin.'
+        logTaskTimeout   = 'İşlem 60 saniyedir ilerlemiyor, iptal edildi. Tekrar deneyebilirsiniz.'
         logDiskStart     = 'Klasör boyutları hesaplanıyor...'
         logDiskDone      = 'Analiz bitti: {0} klasör tarandı.'
         logTaskCreated   = 'Haftalık temizlik görevi oluşturuldu.'
@@ -213,6 +256,45 @@ $script:Strings = @{
         trayShow         = 'Show'
         trayClean        = 'Run Maintenance'
         trayExit         = 'Exit'
+        trayTrap         = 'Spike Trap'
+        navTrap          = 'Spike Trap'
+        trapTitle        = 'SPIKE TRAP · CPU SPIKE RECORDER'
+        trapStRunning    = 'Running'
+        trapStStopped    = 'Stopped'
+        trapStMissing    = 'Not installed'
+        trapStUpdate     = 'Update available'
+        trapDetail       = 'Last check {0} · threshold {1}% · {2} spikes since boot'
+        trapDetailNone   = 'Once installed it records the culprits whenever CPU stays above 85%, even with this window closed.'
+        btnTrapInstall   = 'Install / Update'
+        btnTrapRemove    = 'Remove'
+        btnTrapLog       = 'Open log'
+        trapTopTitle     = 'TOP CULPRITS · LAST 7 DAYS'
+        trapRecentTitle  = 'RECENT SPIKES'
+        colProcess       = 'Process'
+        colSpikes        = 'Spikes'
+        colAvg           = 'Avg share'
+        colLast          = 'Last'
+        colTime          = 'Time'
+        colDur           = 'Duration'
+        colPeak          = 'Peak'
+        colCulprit       = 'Culprit'
+        colNote          = 'Note'
+        trapDrivers      = 'Drivers (interrupt/DPC)'
+        trapNoteScan     = 'Defender scan'
+        trapNoteRealtime = 'Defender real-time'
+        trapCut          = 'cut off'
+        trapOngoing      = 'ongoing'
+        trapSec          = '{0} s'
+        trapConfirmRemove = 'Remove the Spike Trap? Recorded logs are kept.'
+        trapNoLog        = 'No Spike Trap log yet.'
+        logTrapInstallStart = 'Installing Spike Trap...'
+        logTrapRemoveStart  = 'Removing Spike Trap...'
+        logTrapInstalled = 'Spike Trap installed and running.'
+        logTrapRemoved   = 'Spike Trap removed (logs kept).'
+        logTrapFailed    = 'Spike Trap action failed (exit code {0}).'
+        logTrapCancelled = 'Administrator permission was not granted; cancelled.'
+        logTrapNoScript  = 'fotokapan.ps1 was not found next to OpenRelax.'
+        diskProgress     = 'Scanning {0}/{1}: {2}'
         trayBalloon      = 'OpenRelax keeps running in the background. Right-click the tray icon to exit.'
         logStart         = 'System scan started...'
         logAdminOn       = 'Administrator privileges active (full system cleanup).'
@@ -233,6 +315,7 @@ $script:Strings = @{
         logMaintStart    = 'One-click maintenance started...'
         logError         = 'Error: {0}'
         logBusy          = 'A task is already running, please wait.'
+        logTaskTimeout   = 'Task made no progress for 60s and was cancelled. You can try again.'
         logDiskStart     = 'Calculating folder sizes...'
         logDiskDone      = 'Analysis finished: {0} folders scanned.'
         logTaskCreated   = 'Weekly cleanup task registered.'
@@ -282,9 +365,11 @@ function Get-JunkCategories {
 
     # Temp files (user temp, system temp, crash dumps)
     $p = @()
-    if (Test-Path $env:TEMP) { $p += @{ Path = $env:TEMP; Admin = $false } }
+    # MinAgeHours: running apps (installers, dev/AI tools) keep working files
+    # in temp; only files untouched for a day are considered junk.
+    if (Test-Path $env:TEMP) { $p += @{ Path = $env:TEMP; Admin = $false; MinAgeHours = 24 } }
     $sysTemp = Join-Path $env:windir 'Temp'
-    if (Test-Path $sysTemp) { $p += @{ Path = $sysTemp; Admin = $true } }
+    if (Test-Path $sysTemp) { $p += @{ Path = $sysTemp; Admin = $true; MinAgeHours = 24 } }
     $crashDumps = Join-Path $env:LOCALAPPDATA 'CrashDumps'
     if (Test-Path $crashDumps) { $p += @{ Path = $crashDumps; Admin = $false } }
     $cats += @{ Key = 'temp'; Paths = $p }
@@ -380,29 +465,53 @@ function Get-JunkCategories {
     return , $cats
 }
 
+# BudgetSec > 0 caps the walk: a %TEMP% filled by dev/AI tooling can hold
+# hundreds of thousands of folders and take minutes to enumerate. A capped scan
+# returns a lower bound (Partial) instead of stalling. Inside a worker, $Sync
+# (the task's param, visible through dynamic scope) gets a progress beat for
+# the watchdog; in the headless modes it is simply $null.
 function Measure-JunkPaths {
-    param($Paths, [bool]$IsAdmin)
-    $size = [long]0; $count = [long]0; $lockedSize = [long]0
+    param($Paths, [bool]$IsAdmin, [int]$BudgetSec = 0)
+    $size = [long]0; $count = [long]0; $lockedSize = [long]0; $seen = [long]0; $partial = $false
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($p in $Paths) {
         $accessible = $IsAdmin -or (-not $p.Admin)
+        $cutoff = [datetime]::MaxValue
+        if ($p.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$p.MinAgeHours) }
         try {
-            Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                if ($accessible) { $size += $_.Length; $count++ } else { $lockedSize += $_.Length }
-            }
+            # do/while($false) gives 'break' a loop to exit, which stops the pipeline
+            do {
+                Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                    if ($_.LastWriteTime -lt $cutoff) {
+                        if ($accessible) { $size += $_.Length; $count++ } else { $lockedSize += $_.Length }
+                    }
+                    if ((++$seen % 500) -eq 0) {
+                        if ($Sync) { $Sync.Beat = [DateTime]::UtcNow; $Sync.Step = $_.DirectoryName }
+                        if ($BudgetSec -gt 0 -and $sw.Elapsed.TotalSeconds -gt $BudgetSec) { $partial = $true; break }
+                    }
+                }
+            } while ($false)
         } catch {}
+        if ($partial) { break }
     }
-    return @{ Size = $size; Count = $count; LockedSize = $lockedSize }
+    return @{ Size = $size; Count = $count; LockedSize = $lockedSize; Partial = $partial }
 }
 
+# Reads $Recycle.Bin directly instead of Shell.Application COM automation:
+# the COM object is created on a background STA runspace with no message
+# pump, and its cross-apartment calls can block indefinitely waiting for an
+# LPC reply that only a pumping thread would service.
 function Get-RecycleBinInfo {
     $size = [long]0; $count = [long]0
     try {
-        $sh = New-Object -ComObject Shell.Application
-        $bin = $sh.NameSpace(0x0A)
-        if ($bin) {
-            foreach ($item in @($bin.Items())) {
-                $size += [long]$item.Size
-                $count++
+        $sid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+        $drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady }
+        foreach ($drive in $drives) {
+            $binPath = Join-Path (Join-Path $drive.RootDirectory.FullName '$Recycle.Bin') $sid
+            if (Test-Path -LiteralPath $binPath) {
+                Get-ChildItem -LiteralPath $binPath -File -Force -Recurse -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -notlike '$I*' } |
+                    ForEach-Object { $size += $_.Length; $count++ }
             }
         }
     } catch {}
@@ -411,29 +520,31 @@ function Get-RecycleBinInfo {
 
 function Remove-JunkPaths {
     param($Paths, [bool]$IsAdmin)
-    $bytes = [long]0; $count = [long]0
+    $bytes = [long]0; $count = [long]0; $seen = [long]0
     foreach ($p in $Paths) {
         if ($p.Admin -and -not $IsAdmin) { continue }
-        $items = Get-ChildItem -LiteralPath $p.Path -Recurse -Force -ErrorAction SilentlyContinue
-        $files = $items | Where-Object { -not $_.PSIsContainer }
-        $dirs = $items | Where-Object { $_.PSIsContainer } |
-            Sort-Object -Property @{ Expression = { $_.FullName.Length } } -Descending
-        foreach ($f in $files) {
+        $cutoff = [datetime]::MaxValue
+        if ($p.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$p.MinAgeHours) }
+        # Streamed, not collected first: buffering and sorting millions of
+        # entries stalled cleaning of a large %TEMP% for minutes.
+        Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ((++$seen % 500) -eq 0 -and $Sync) { $Sync.Beat = [DateTime]::UtcNow }
+            if ($_.LastWriteTime -ge $cutoff) { return }
             try {
-                $len = $f.Length
-                Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop
+                $len = $_.Length
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
                 $bytes += $len; $count++
             } catch {
                 # Locked or in-use file - skip silently
             }
         }
-        foreach ($d in $dirs) {
-            try {
-                if (-not (Get-ChildItem -LiteralPath $d.FullName -Force -ErrorAction SilentlyContinue)) {
-                    Remove-Item -LiteralPath $d.FullName -Force -ErrorAction SilentlyContinue
-                }
-            } catch {}
-        }
+        # Then drop folders left empty, deepest first. Directory.Delete only
+        # removes empty folders; reparse points (junctions) are left alone.
+        Get-ChildItem -LiteralPath $p.Path -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { if ((++$seen % 500) -eq 0 -and $Sync) { $Sync.Beat = [DateTime]::UtcNow }; $_ } |
+            Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+            Sort-Object -Property @{ Expression = { $_.FullName.Length } } -Descending |
+            ForEach-Object { try { [System.IO.Directory]::Delete($_.FullName) } catch {} }
     }
     return @{ Bytes = $bytes; Count = $count }
 }
@@ -482,19 +593,21 @@ param($Sync, $Opt)
 try {
     $cats = Get-JunkCategories
     $results = @{}
-    $totalSize = [long]0; $totalCount = [long]0; $lockedSize = [long]0
+    $totalSize = [long]0; $totalCount = [long]0; $lockedSize = [long]0; $partial = $false
     foreach ($cat in $cats) {
+        $Sync.Step = $cat.Key
         if ($cat.Key -eq 'recycle') {
             $info = Get-RecycleBinInfo
             $results[$cat.Key] = @{ Size = $info.Size; Count = $info.Count }
             $totalSize += $info.Size; $totalCount += $info.Count
         } else {
-            $m = Measure-JunkPaths -Paths $cat.Paths -IsAdmin:$Opt.IsAdmin
+            $m = Measure-JunkPaths -Paths $cat.Paths -IsAdmin:$Opt.IsAdmin -BudgetSec 6
             $results[$cat.Key] = @{ Size = $m.Size; Count = $m.Count }
             $totalSize += $m.Size; $totalCount += $m.Count; $lockedSize += $m.LockedSize
+            if ($m.Partial) { $partial = $true }
         }
     }
-    $Sync.ScanResult = @{ Categories = $results; TotalSize = $totalSize; FileCount = $totalCount; LockedSize = $lockedSize }
+    $Sync.ScanResult = @{ Categories = $results; TotalSize = $totalSize; FileCount = $totalCount; LockedSize = $lockedSize; Partial = $partial }
 } catch {
     $Sync.Log.Enqueue(@{ Text = "Scan error: $($_.Exception.Message)"; Type = 'error' })
     $Sync.ScanResult = @{ Categories = @{}; TotalSize = 0; FileCount = 0; LockedSize = 0 }
@@ -575,9 +688,15 @@ param($Sync, $Opt)
 try {
     $rows = @()
     $dirs = Get-ChildItem -LiteralPath $Opt.Target -Directory -Force -ErrorAction SilentlyContinue
+    $seen = [long]0; $n = 0; $count = @($dirs).Count
     foreach ($d in $dirs) {
+        $n++
+        $Sync.DiskProgress = @($n, $count, $d.Name)
         $sz = [long]0
-        Get-ChildItem -LiteralPath $d.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { $sz += $_.Length }
+        Get-ChildItem -LiteralPath $d.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            $sz += $_.Length
+            if ((++$seen % 500) -eq 0) { $Sync.Beat = [DateTime]::UtcNow }
+        }
         $rows += @{ Name = $d.Name; Size = $sz }
     }
     $top = $rows | Sort-Object -Property @{ Expression = { $_.Size } } -Descending | Select-Object -First 10
@@ -628,6 +747,157 @@ function Set-WeeklyTask {
 }
 #endregion
 
+#region 5b. Fotokapan (CPU spike trap) integration
+# The trap runs as a SYSTEM scheduled task (fotokapan.ps1) so it keeps sampling
+# while this GUI is starved, frozen or closed. OpenRelax installs it and reads
+# its machine-readable output: durum.json (heartbeat) and spikes-YYYY-MM.jsonl.
+$script:TrapTaskName = 'OpenRelax Fotokapan'
+$script:TrapDir      = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
+# Test hook: tests\gui-stress.ps1 points the view at a synthetic data set
+if ($env:OPENRELAX_TRAP_DIR) { $script:TrapDir = $env:OPENRELAX_TRAP_DIR }
+$script:TrapScript   = Join-Path (Split-Path -Parent $script:ScriptPath) 'fotokapan.ps1'
+$script:TrapCache    = @{}
+
+# The trap appends to / swaps these files while we read them: share everything.
+function Read-SharedText([string]$Path) {
+    $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite, Delete')
+    try {
+        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+        return $sr.ReadToEnd()
+    } finally {
+        $fs.Dispose()
+    }
+}
+
+function Get-TrapState {
+    param([string]$Dir = $script:TrapDir)
+    $st = @{ Installed = $false; Running = $false; Outdated = $false; Beat = $null; Threshold = 85; Spikes = 0 }
+    $taskKnown = $true; $taskFound = $false; $taskRunning = $false
+    try {
+        $svc = New-Object -ComObject Schedule.Service
+        $svc.Connect()
+        $task = $svc.GetFolder('\').GetTask($script:TrapTaskName)
+        $taskFound = $true
+        $taskRunning = ($task.State -eq 4)   # TASK_STATE_RUNNING
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($task)
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($svc)
+    } catch {
+        # 0x80070002 = no such task. Anything else (a standard user may not be
+        # allowed to read a SYSTEM task) leaves the answer to the heartbeat.
+        $hr = $_.Exception.HResult
+        if ($_.Exception.InnerException) { $hr = $_.Exception.InnerException.HResult }
+        if ($hr -ne -2147024894) { $taskKnown = $false }
+    }
+    $beatFile = Join-Path $Dir 'durum.json'
+    if (Test-Path -LiteralPath $beatFile) {
+        try {
+            $b = (Read-SharedText $beatFile) | ConvertFrom-Json
+            $st.Beat = [datetime]::ParseExact([string]$b.t, 's', [System.Globalization.CultureInfo]::InvariantCulture)
+            $st.Threshold = [int]$b.threshold
+            $st.Spikes = [int]$b.spikes
+        } catch {}
+    }
+    # The heartbeat is rewritten every minute; a stuck or dead monitor goes stale.
+    $fresh = [bool]($st.Beat -and ((Get-Date) - $st.Beat).TotalSeconds -lt 180)
+    if ($taskKnown) {
+        $st.Installed = $taskFound
+        $st.Running = $taskRunning -and $fresh
+    } else {
+        $st.Installed = $fresh
+        $st.Running = $fresh
+    }
+    $installed = Join-Path $Dir 'fotokapan.ps1'
+    if ($st.Installed -and (Test-Path -LiteralPath $installed) -and (Test-Path -LiteralPath $script:TrapScript)) {
+        try { $st.Outdated = (Get-FileHash -LiteralPath $installed).Hash -ne (Get-FileHash -LiteralPath $script:TrapScript).Hash } catch {}
+    }
+    return $st
+}
+
+# Records of the last $Days days, oldest first. Parsed files are cached by
+# length, so a refresh with no new spikes costs a stat call per file.
+function Read-TrapRecords {
+    param([string]$Dir = $script:TrapDir, [int]$Days = 7)
+    $cutoff = (Get-Date).AddDays(-$Days).ToString('s')
+    $all = New-Object System.Collections.Generic.List[object]
+    foreach ($month in @((Get-Date).AddMonths(-1), (Get-Date))) {
+        $path = Join-Path $Dir ('spikes-{0:yyyy-MM}.jsonl' -f $month)
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $len = (Get-Item -LiteralPath $path).Length
+        $c = $script:TrapCache[$path]
+        if (-not $c -or $c.Length -ne $len) {
+            $items = New-Object System.Collections.Generic.List[object]
+            # Old lines are skipped by their ISO timestamp prefix without being
+            # parsed; a line still being appended has no closing brace yet.
+            $lines = @((Read-SharedText $path) -split "`n" | Where-Object {
+                $_.Length -gt 25 -and $_.StartsWith('{"t":"') -and $_.TrimEnd().EndsWith('}') -and $_.Substring(6, 19) -ge $cutoff })
+            if ($lines.Count) {
+                try {
+                    foreach ($r in ('[' + ($lines -join ',') + ']' | ConvertFrom-Json)) { $items.Add($r) }
+                } catch {
+                    # A damaged line spoils the batch parse: fall back to line by line.
+                    $items.Clear()
+                    foreach ($l in $lines) { try { $items.Add(($l | ConvertFrom-Json)) } catch {} }
+                }
+            }
+            $c = @{ Length = $len; Items = $items }
+            $script:TrapCache[$path] = $c
+        }
+        foreach ($r in $c.Items) { if ([string]$r.t -ge $cutoff) { $all.Add($r) } }
+    }
+    return , $all
+}
+
+# Pairs start/end records into episodes. A 'monitor' record (trap restarted)
+# or a new start closes an episode whose end was never written.
+function Get-TrapEpisodes {
+    param($Records)
+    $episodes = New-Object System.Collections.Generic.List[object]
+    $open = $null
+    foreach ($r in $Records) {
+        switch ([string]$r.kind) {
+            'start' {
+                if ($open) { $open.Cut = $true }
+                $open = @{ Start = $r; Duration = $null; Peak = $null; Cut = $false; Defender = $r.defender }
+                $episodes.Add($open)
+            }
+            'ongoing' { if ($open -and -not $open.Defender) { $open.Defender = $r.defender } }
+            'end'     { if ($open) { $open.Duration = $r.durationSec; $open.Peak = $r.peak; $open = $null } }
+            'monitor' { if ($open) { $open.Cut = $true; $open = $null } }
+        }
+    }
+    return , $episodes
+}
+
+# The main culprit of an episode: its top process, unless CPU time that no
+# process accounts for (interrupts/DPCs, i.e. drivers) outweighs it.
+function Get-TrapCulprit($Start) {
+    $top = @($Start.top | Where-Object { $_ })
+    $unattributed = [double]$Start.total - [double]$Start.attributed
+    if ($top.Count -eq 0 -or $unattributed -gt [double]$top[0].pct) {
+        return @{ Name = '*drivers*'; Pct = [Math]::Max(0, $unattributed) }
+    }
+    return @{ Name = [string]$top[0].name; Pct = [double]$top[0].pct }
+}
+
+function Get-TrapCulprits {
+    param($Episodes)
+    $by = @{}
+    foreach ($ep in $Episodes) {
+        $c = Get-TrapCulprit $ep.Start
+        $e = $by[$c.Name]
+        if (-not $e) { $e = @{ Name = $c.Name; Count = 0; Sum = 0.0; Last = '' }; $by[$c.Name] = $e }
+        $e.Count++
+        $e.Sum += $c.Pct
+        if ([string]$ep.Start.t -gt $e.Last) { $e.Last = [string]$ep.Start.t }
+    }
+    return @($by.Values | Sort-Object -Property @{ Expression = { $_.Count }; Descending = $true }, @{ Expression = { $_.Sum }; Descending = $true })
+}
+
+function ConvertFrom-TrapTime([string]$Iso) {
+    return [datetime]::ParseExact($Iso, 's', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+#endregion
+
 #region 6. Headless modes (-AutoClean / -SelfTest) - no GUI is loaded
 if ($AutoClean) {
     $logFile = Join-Path $script:SettingsDir 'autoclean.log'
@@ -668,7 +938,7 @@ if ($AutoClean) {
 }
 
 if ($SelfTest) {
-    Write-Host "OpenRelax v$script:AppVersion self-test (read-only scan)"
+    Write-Host "OpenRelax v$script:AppVersion $script:AppEdition self-test (read-only scan)"
     Write-Host "Admin: $script:IsAdmin | Settings: $script:SettingsFile"
     $grandSize = [long]0; $grandCount = [long]0; $grandLocked = [long]0
     foreach ($cat in (Get-JunkCategories)) {
@@ -677,12 +947,23 @@ if ($SelfTest) {
             Write-Host ("  {0,-10} {1,10}  ({2} items)" -f $cat.Key, (Format-Bytes $info.Size), $info.Count)
             $grandSize += $info.Size; $grandCount += $info.Count
         } else {
-            $m = Measure-JunkPaths -Paths $cat.Paths -IsAdmin:$script:IsAdmin
-            Write-Host ("  {0,-10} {1,10}  ({2} files, {3} paths, locked {4})" -f $cat.Key, (Format-Bytes $m.Size), $m.Count, @($cat.Paths).Count, (Format-Bytes $m.LockedSize))
+            $m = Measure-JunkPaths -Paths $cat.Paths -IsAdmin:$script:IsAdmin -BudgetSec 6
+            $note = ''
+            if ($m.Partial) { $note = ' [partial: 6s budget hit, size is a lower bound]' }
+            Write-Host ("  {0,-10} {1,10}  ({2} files, {3} paths, locked {4}){5}" -f $cat.Key, (Format-Bytes $m.Size), $m.Count, @($cat.Paths).Count, (Format-Bytes $m.LockedSize), $note)
             $grandSize += $m.Size; $grandCount += $m.Count; $grandLocked += $m.LockedSize
         }
     }
     Write-Host "Total cleanable: $(Format-Bytes $grandSize) in $grandCount files (admin-locked: $(Format-Bytes $grandLocked))"
+    $ts = Get-TrapState
+    $beat = 'none'
+    if ($ts.Beat) { $beat = $ts.Beat.ToString('yyyy-MM-dd HH:mm:ss') }
+    Write-Host ("Fotokapan: installed={0} running={1} outdated={2} heartbeat={3} threshold={4}" -f $ts.Installed, $ts.Running, $ts.Outdated, $beat, $ts.Threshold)
+    $episodes = Get-TrapEpisodes (Read-TrapRecords)
+    Write-Host ("  spikes in the last 7 days: {0}" -f $episodes.Count)
+    foreach ($c in (Get-TrapCulprits $episodes | Select-Object -First 3)) {
+        Write-Host ("  culprit {0,-28} x{1,-4} avg {2:N0}%" -f $c.Name, $c.Count, ($c.Sum / $c.Count))
+    }
     Write-Host "Self-test OK"
     exit 0
 }
@@ -762,6 +1043,7 @@ if (-not ([System.Management.Automation.PSTypeName]'Win32Helper').Type) {
 $script:Sync = [hashtable]::Synchronized(@{})
 $script:Sync.Log = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
 $script:Sync.Busy = $false
+$script:Sync.Beat = [DateTime]::UtcNow
 $script:Sync.ScanResult = $null
 $script:Sync.CleanResult = $null
 $script:Sync.RamResult = $null
@@ -941,7 +1223,7 @@ $titleBar.Controls.Add($logoDot)
 Set-RoundedRegion $logoDot 8
 
 $titleLabel = New-Object System.Windows.Forms.Label
-$titleLabel.Text = "OpenRelax PC Care v$script:AppVersion"
+$titleLabel.Text = "OpenRelax PC Care v$script:AppVersion $script:AppEdition"
 $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $titleLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $titleLabel.Location = New-Object System.Drawing.Point(30, 11)
@@ -993,10 +1275,11 @@ $navPanel.add_Paint({
 $btnNavDash = New-Object System.Windows.Forms.Button
 $btnNavSettings = New-Object System.Windows.Forms.Button
 $btnNavDisk = New-Object System.Windows.Forms.Button
-$navButtons = @($btnNavDash, $btnNavSettings, $btnNavDisk)
-$navTags = @('dash', 'settings', 'disk')
+$btnNavTrap = New-Object System.Windows.Forms.Button
+$navButtons = @($btnNavDash, $btnNavSettings, $btnNavDisk, $btnNavTrap)
+$navTags = @('dash', 'settings', 'disk', 'trap')
 $navX = 18
-for ($i = 0; $i -lt 3; $i++) {
+for ($i = 0; $i -lt $navButtons.Count; $i++) {
     $b = $navButtons[$i]
     $b.Size = New-Object System.Drawing.Size(104, 30)
     $b.Location = New-Object System.Drawing.Point($navX, 3)
@@ -1037,12 +1320,21 @@ $viewDisk.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $viewDisk.Visible = $false
 $contentHost.Controls.Add($viewDisk)
 
+$viewTrap = New-Object System.Windows.Forms.Panel
+$viewTrap.Size = New-Object System.Drawing.Size(644, 412)
+$viewTrap.Location = New-Object System.Drawing.Point(0, 0)
+$viewTrap.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
+$viewTrap.Visible = $false
+$contentHost.Controls.Add($viewTrap)
+
 function Show-View {
     param([string]$Name)
     $script:ActiveView = $Name
     $viewDash.Visible = ($Name -eq 'dash')
     $viewSettings.Visible = ($Name -eq 'settings')
     $viewDisk.Visible = ($Name -eq 'disk')
+    $viewTrap.Visible = ($Name -eq 'trap')
+    if ($Name -eq 'trap') { Update-TrapView }
     foreach ($b in $navButtons) {
         if ($b.Tag -eq $Name) {
             $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
@@ -1061,6 +1353,7 @@ $script:NavClickHandler = {
 $btnNavDash.add_Click($script:NavClickHandler)
 $btnNavSettings.add_Click($script:NavClickHandler)
 $btnNavDisk.add_Click($script:NavClickHandler)
+$btnNavTrap.add_Click($script:NavClickHandler)
 #endregion
 
 #region 11. Dashboard view - left column (RAM, CPU, system cards)
@@ -1733,6 +2026,214 @@ $diskCard.Controls.Add($lvDisk)
 Register-CardHover $diskCard
 #endregion
 
+#region 14b. Fotokapan (spike trap) view
+function New-TrapLabel($Parent, $X, $Y, $Size, $Bold, $Color) {
+    $l = New-Object System.Windows.Forms.Label
+    $style = [System.Drawing.FontStyle]::Regular
+    if ($Bold) { $style = [System.Drawing.FontStyle]::Bold }
+    $l.Font = New-Object System.Drawing.Font("Segoe UI", $Size, $style)
+    $l.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($Color)
+    $l.Location = New-Object System.Drawing.Point($X, $Y)
+    $l.AutoSize = $true
+    $Parent.Controls.Add($l)
+    return $l
+}
+
+function New-TrapButton($Parent, $X, $Y, $Color) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Size = New-Object System.Drawing.Size(104, 30)
+    $b.Location = New-Object System.Drawing.Point($X, $Y)
+    $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $b.FlatAppearance.BorderColor = [System.Drawing.ColorTranslator]::FromHtml($Color)
+    $b.FlatAppearance.BorderSize = 1
+    $b.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+    $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($Color)
+    $b.BackColor = [System.Drawing.Color]::Transparent
+    $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $Parent.Controls.Add($b)
+    return $b
+}
+
+function New-TrapList($Parent, $X, $Y, $W, $H, [int[]]$Widths) {
+    $lv = New-Object System.Windows.Forms.ListView
+    $lv.Location = New-Object System.Drawing.Point($X, $Y)
+    $lv.Size = New-Object System.Drawing.Size($W, $H)
+    $lv.View = [System.Windows.Forms.View]::Details
+    $lv.FullRowSelect = $true
+    $lv.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
+    $lv.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#E2E8F0')
+    $lv.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $lv.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $lv.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
+    foreach ($w in $Widths) { [void]$lv.Columns.Add('', $w) }
+    $Parent.Controls.Add($lv)
+    return $lv
+}
+
+$trapCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(644, 96))
+$trapTitle = New-TrapLabel $trapCard 12 10 7.5 $true '#94A3B8'
+$lblTrapState = New-TrapLabel $trapCard 12 26 13 $true '#64748B'
+$lblTrapDetail = New-TrapLabel $trapCard 12 56 8 $false '#64748B'
+$lblTrapDetail.AutoSize = $false
+$lblTrapDetail.Size = New-Object System.Drawing.Size(284, 36)
+$btnTrapInstall = New-TrapButton $trapCard 304 56 '#3B82F6'
+$btnTrapRemove = New-TrapButton $trapCard 416 56 '#F87171'
+$btnTrapLog = New-TrapButton $trapCard 528 56 '#94A3B8'
+Register-CardHover $trapCard
+
+$trapTopCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 106)) (New-Object System.Drawing.Size(644, 124))
+$trapTopTitle = New-TrapLabel $trapTopCard 12 8 7.5 $true '#94A3B8'
+# Column widths leave room for the vertical scrollbar (no horizontal one)
+$lvTrapTop = New-TrapList $trapTopCard 12 28 620 88 @(290, 80, 90, 120)
+Register-CardHover $trapTopCard
+
+$trapRecentCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 238)) (New-Object System.Drawing.Size(644, 166))
+$trapRecentTitle = New-TrapLabel $trapRecentCard 12 8 7.5 $true '#94A3B8'
+$lvTrapRecent = New-TrapList $trapRecentCard 12 28 620 130 @(110, 64, 56, 246, 110)
+Register-CardHover $trapRecentCard
+
+$script:TrapProc = $null
+$script:TrapLastState = $null
+$script:TrapSig = $null
+
+function Get-TrapCulpritText([string]$Name) {
+    if ($Name -eq '*drivers*') { return (T 'trapDrivers') }
+    return $Name
+}
+
+function Set-TrapStateLabel($St) {
+    if (-not $St.Installed)  { $key = 'trapStMissing'; $color = '#64748B' }
+    elseif ($St.Outdated)    { $key = 'trapStUpdate';  $color = '#3B82F6' }
+    elseif ($St.Running)     { $key = 'trapStRunning'; $color = '#10B981' }
+    else                     { $key = 'trapStStopped'; $color = '#F59E0B' }
+    $lblTrapState.Text = (T $key)
+    $lblTrapState.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($color)
+    if ($St.Installed -and $St.Beat) {
+        $lblTrapDetail.Text = [string]::Format((T 'trapDetail'), $St.Beat.ToString('HH:mm:ss'), $St.Threshold, $St.Spikes)
+    } else {
+        $lblTrapDetail.Text = (T 'trapDetailNone')
+    }
+}
+
+function Update-TrapButtons {
+    $idle = -not $script:TrapProc
+    $btnTrapInstall.Enabled = $idle
+    $btnTrapRemove.Enabled = $idle -and $script:TrapLastState -and $script:TrapLastState.Installed
+}
+
+function Update-TrapLists($Episodes, $St) {
+    $lvTrapTop.BeginUpdate()
+    $lvTrapTop.Items.Clear()
+    foreach ($c in (Get-TrapCulprits $Episodes | Select-Object -First 8)) {
+        $item = New-Object System.Windows.Forms.ListViewItem((Get-TrapCulpritText $c.Name))
+        [void]$item.SubItems.Add([string]$c.Count)
+        [void]$item.SubItems.Add(('{0:N0}%' -f ($c.Sum / $c.Count)))
+        [void]$item.SubItems.Add((ConvertFrom-TrapTime $c.Last).ToString('dd.MM HH:mm'))
+        [void]$lvTrapTop.Items.Add($item)
+    }
+    $lvTrapTop.EndUpdate()
+
+    $lvTrapRecent.BeginUpdate()
+    $lvTrapRecent.Items.Clear()
+    for ($i = $Episodes.Count - 1; $i -ge [Math]::Max(0, $Episodes.Count - 30); $i--) {
+        $ep = $Episodes[$i]
+        $c = Get-TrapCulprit $ep.Start
+        if ($null -ne $ep.Duration) { $dur = [string]::Format((T 'trapSec'), $ep.Duration) }
+        elseif ($ep.Cut -or -not $St.Running) { $dur = (T 'trapCut') }
+        else { $dur = (T 'trapOngoing') }
+        $peak = ''
+        if ($null -ne $ep.Peak) { $peak = '{0}%' -f $ep.Peak }
+        $note = ''
+        if ($ep.Defender -eq 'scan') { $note = (T 'trapNoteScan') }
+        elseif ($ep.Defender -eq 'realtime') { $note = (T 'trapNoteRealtime') }
+        $item = New-Object System.Windows.Forms.ListViewItem((ConvertFrom-TrapTime $ep.Start.t).ToString('dd.MM HH:mm:ss'))
+        [void]$item.SubItems.Add($dur)
+        [void]$item.SubItems.Add($peak)
+        [void]$item.SubItems.Add(('{0}  {1:N0}%' -f (Get-TrapCulpritText $c.Name), $c.Pct))
+        [void]$item.SubItems.Add($note)
+        [void]$lvTrapRecent.Items.Add($item)
+    }
+    $lvTrapRecent.EndUpdate()
+}
+
+function Update-TrapView {
+    try {
+        $st = Get-TrapState
+        $script:TrapLastState = $st
+        Set-TrapStateLabel $st
+        $records = Read-TrapRecords
+        # Rebuild the lists only when the data, the language or the state changed.
+        $last = ''
+        if ($records.Count) { $last = [string]$records[$records.Count - 1].t }
+        $sig = '{0}|{1}|{2}|{3}' -f $records.Count, $last, $script:Settings.language, $st.Running
+        if ($sig -ne $script:TrapSig) {
+            $script:TrapSig = $sig
+            Update-TrapLists (Get-TrapEpisodes $records) $st
+        }
+        Update-TrapButtons
+    } catch {
+        if (-not $script:TrapErrorShown) {
+            $script:TrapErrorShown = $true
+            Write-Log ([string]::Format((T 'logError'), $_.Exception.Message)) 'error'
+        }
+    }
+}
+
+function Start-TrapAction([string]$Mode) {
+    if ($script:TrapProc) { Write-Log (T 'logBusy') 'warn'; return }
+    if (-not (Test-Path -LiteralPath $script:TrapScript)) { Write-Log (T 'logTrapNoScript') 'error'; return }
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ('"{0}"' -f $script:TrapScript), ('-' + $Mode))
+    $sp = @{ FilePath = $script:PsExe; ArgumentList = $argList; PassThru = $true; WindowStyle = 'Hidden' }
+    # Registering a SYSTEM task needs elevation: ask through UAC when not admin.
+    if (-not $script:IsAdmin) { $sp.Verb = 'RunAs' }
+    try {
+        $script:TrapProc = Start-Process @sp
+        $script:TrapMode = $Mode
+        $script:TrapStarted = Get-Date
+        if ($Mode -eq 'Install') { Write-Log (T 'logTrapInstallStart') 'info' } else { Write-Log (T 'logTrapRemoveStart') 'info' }
+    } catch {
+        $script:TrapProc = $null
+        if ($_.Exception.Message -match 'cancel|iptal') { Write-Log (T 'logTrapCancelled') 'warn' }
+        else { Write-Log ([string]::Format((T 'logError'), $_.Exception.Message)) 'error' }
+    }
+    Update-TrapButtons
+}
+
+# Polled by the pump timer: reports how the install/uninstall run ended.
+function Complete-TrapAction {
+    $done = $false; $code = $null
+    try {
+        if ($script:TrapProc.HasExited) { $done = $true; $code = $script:TrapProc.ExitCode }
+    } catch {
+        # No access to the elevated process: give it time, then just refresh.
+        $done = ((Get-Date) - $script:TrapStarted).TotalSeconds -gt 20
+    }
+    if (-not $done) { return }
+    if ($code -eq 0) {
+        if ($script:TrapMode -eq 'Install') { Write-Log (T 'logTrapInstalled') 'success' } else { Write-Log (T 'logTrapRemoved') 'success' }
+    } elseif ($null -ne $code) {
+        Write-Log ([string]::Format((T 'logTrapFailed'), $code)) 'error'
+    }
+    try { $script:TrapProc.Dispose() } catch {}
+    $script:TrapProc = $null
+    $script:TrapSig = $null
+    Update-TrapView
+}
+
+$btnTrapInstall.add_Click({ Start-TrapAction 'Install' })
+$btnTrapRemove.add_Click({
+    $answer = [System.Windows.Forms.MessageBox]::Show((T 'trapConfirmRemove'), 'OpenRelax',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Start-TrapAction 'Uninstall' }
+})
+$btnTrapLog.add_Click({
+    $log = Get-ChildItem -LiteralPath $script:TrapDir -Filter 'fotokapan-*.log' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if ($log) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $log.FullName) }
+    else { Write-Log (T 'trapNoLog') 'warn' }
+})
+#endregion
+
 #region 15. System tray icon
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $notifyIcon.Icon = $script:AppIcon
@@ -1741,6 +2242,7 @@ $notifyIcon.Visible = $true
 
 $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $miShow = $trayMenu.Items.Add("Show")
+$miTrap = $trayMenu.Items.Add("Spike Trap")
 $miClean = $trayMenu.Items.Add("Clean")
 [void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miExit = $trayMenu.Items.Add("Exit")
@@ -1764,6 +2266,7 @@ function Hide-ToTray {
 
 $notifyIcon.add_DoubleClick({ Show-MainWindow })
 $miShow.add_Click({ Show-MainWindow })
+$miTrap.add_Click({ Show-MainWindow; Show-View 'trap' })
 $miClean.add_Click({ Show-MainWindow; $btnOneClick.PerformClick() })
 $miExit.add_Click({
     $script:ReallyExit = $true
@@ -1794,6 +2297,7 @@ function Write-Log {
         [string]$Message,
         [string]$Type = "info"
     )
+    if ($Type -eq 'error') { $script:LogErrors++; $script:LastErrorText = $Message }
     $timestamp = Get-Date -Format "HH:mm:ss"
 
     $logAction = {
@@ -1835,15 +2339,21 @@ function Write-Log {
 #region 17. Background task runner and completion handlers
 function Start-EngineTask {
     param([string]$TaskCode, [hashtable]$Opt)
+    # MTA: this worker never touches WinForms controls or COM, so it doesn't
+    # need an STA message queue. ThreadOptions stays at its default (a fresh
+    # thread per invocation): with ReuseThread the pipeline never started on
+    # this machine - every scan/clean/disk/RAM task hung until the watchdog
+    # gave up (reproduced 3/3; Default 2/2 fine), and each runspace runs a
+    # single pipeline anyway.
     $rs = [runspacefactory]::CreateRunspace()
-    $rs.ApartmentState = [System.Threading.ApartmentState]::STA
-    $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
+    $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
     $rs.Open()
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     [void]$ps.AddScript($script:EngineCode)
     [void]$ps.AddStatement().AddScript($TaskCode).AddArgument($script:Sync).AddArgument($Opt)
     $handle = $ps.BeginInvoke()
+    $script:Sync.Beat = [DateTime]::UtcNow
     [void]$script:Tasks.Add(@{ PS = $ps; RS = $rs; Handle = $handle })
 }
 
@@ -1886,7 +2396,11 @@ function Complete-Scan {
     param($r)
     $script:CatSizes = @{}
     foreach ($k in $r.Categories.Keys) { $script:CatSizes[$k] = $r.Categories[$k].Size }
-    if ($r.TotalSize -gt 0) { $lblJunkVal.Text = Format-Bytes ([long]$r.TotalSize) }
+    if ($r.TotalSize -gt 0) {
+        $lblJunkVal.Text = Format-Bytes ([long]$r.TotalSize)
+        # Time-capped scan: the real total is at least this much
+        if ($r.Partial) { $lblJunkVal.Text = '≥ ' + $lblJunkVal.Text }
+    }
     else { $lblJunkVal.Text = (T 'cleanState') }
     Write-Log ([string]::Format((T 'logScanDone'), $r.FileCount, (Format-Bytes ([long]$r.TotalSize)))) 'info'
     if ($r.LockedSize -gt 0) {
@@ -1925,6 +2439,8 @@ function Complete-Ram {
 
 function Complete-Disk {
     param($r)
+    $script:Sync.DiskProgress = $null
+    $diskDesc.Text = (T 'diskDesc')
     $lvDisk.Items.Clear()
     foreach ($row in $r.Rows) {
         $item = New-Object System.Windows.Forms.ListViewItem($row.Name)
@@ -1943,11 +2459,99 @@ function Complete-Disk {
 # mid-run and would then never fire.
 $script:SmokeTimer = New-Object System.Windows.Forms.Timer
 $script:SmokeTimer.Interval = 4000
+$smokeSec = 0
+if ([int]::TryParse([string]$env:OPENRELAX_SMOKETEST, [ref]$smokeSec) -and $smokeSec -gt 4) {
+    $script:SmokeTimer.Interval = $smokeSec * 1000
+}
 $script:SmokeTimer.add_Tick({
     $script:SmokeTimer.Stop()
     $script:ReallyExit = $true
     $form.Close()
 })
+
+# GUI stress support (tests\gui-stress.ps1). OPENRELAX_STRESS=<cycles> drives
+# the real handlers through the live message loop - nav clicks over every
+# view, language re-apply (in memory only), junk scans in the worker,
+# Fotokapan refreshes - and samples memory and handle/GDI/USER object counts
+# once per cycle. Nothing is cleaned and no setting is saved. The JSON report
+# goes to OPENRELAX_STRESS_REPORT, Fotokapan view snapshots next to it.
+$script:StressCycles = 0
+[void][int]::TryParse([string]$env:OPENRELAX_STRESS, [ref]$script:StressCycles)
+if ($script:StressCycles -gt 0) {
+    Add-Type -Namespace OpenRelax -Name StressApi -MemberDefinition @'
+[DllImport("user32.dll")] public static extern uint GetGuiResources(IntPtr hProcess, uint uiFlags);
+[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+'@
+    $script:StressReport = [string]$env:OPENRELAX_STRESS_REPORT
+    $script:StressSamples = New-Object System.Collections.ArrayList
+    $script:StressErrors = New-Object System.Collections.ArrayList
+    $script:StressStep = 0
+    $script:StressScans = 0
+    $script:StressLanguage = $script:Settings.language
+    $script:StressClock = [System.Diagnostics.Stopwatch]::StartNew()
+    # Never trim other apps' working sets during a test run (in memory only).
+    $script:Settings.autoBoost = $false
+
+    function Save-StressSnapshot([string]$Name) {
+        if (-not $script:StressReport) { return }
+        $bmp = New-Object System.Drawing.Bitmap($form.Width, $form.Height)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $hdc = $g.GetHdc()
+        try { [void][OpenRelax.StressApi]::PrintWindow($form.Handle, $hdc, 2) }
+        finally { $g.ReleaseHdc($hdc); $g.Dispose() }
+        $bmp.Save((Join-Path (Split-Path -Parent $script:StressReport) $Name), [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+    }
+
+    function Add-StressSample([int]$Cycle) {
+        $me = [System.Diagnostics.Process]::GetCurrentProcess()
+        [void]$script:StressSamples.Add([ordered]@{
+            cycle = $Cycle; sec = [Math]::Round($script:StressClock.Elapsed.TotalSeconds, 1)
+            privateMB = [Math]::Round($me.PrivateMemorySize64 / 1MB, 1); handles = $me.HandleCount
+            gdi = [int][OpenRelax.StressApi]::GetGuiResources($me.Handle, 0)
+            user = [int][OpenRelax.StressApi]::GetGuiResources($me.Handle, 1)
+            tasks = $script:Tasks.Count; step = [string]$script:Sync.Step
+            beatAgeSec = [Math]::Round(([DateTime]::UtcNow - [DateTime]$script:Sync.Beat).TotalSeconds, 1)
+        })
+        $me.Dispose()
+    }
+
+    $script:StressTimer = New-Object System.Windows.Forms.Timer
+    $script:StressTimer.Interval = 250
+    $script:StressTimer.add_Tick({
+        try {
+            $s = $script:StressStep++
+            $cycle = [int][Math]::Floor($s / 4)
+            if ($cycle -lt $script:StressCycles) {
+                $navButtons[$s % 4].PerformClick()
+                if (($s % 4) -eq 3) {
+                    # The Fotokapan view is up: snapshot it once per language
+                    if ($cycle -lt 2) { Save-StressSnapshot ('stress-trap-{0}.png' -f $script:Settings.language) }
+                    if ($script:Settings.language -eq 'en') { $script:Settings.language = 'tr' } else { $script:Settings.language = 'en' }
+                    Apply-Language
+                    if (-not $script:Sync.Busy -and ($cycle % 3) -eq 0) { Start-ScanTask; $script:StressScans++ }
+                    Add-StressSample $cycle
+                }
+            } elseif (-not $script:Sync.Busy -or $script:StressClock.Elapsed.TotalMinutes -gt 10) {
+                $script:StressTimer.Stop()
+                $script:Settings.language = $script:StressLanguage
+                Apply-Language
+                Add-StressSample $script:StressCycles
+                $report = [ordered]@{
+                    version = "$script:AppVersion $script:AppEdition"; cycles = $script:StressCycles; scans = $script:StressScans
+                    seconds = [Math]::Round($script:StressClock.Elapsed.TotalSeconds, 1); busyAtEnd = [bool]$script:Sync.Busy
+                    logErrors = [int]$script:LogErrors; lastError = [string]$script:LastErrorText; tickError = [bool]$script:TickErrorShown
+                    errors = $script:StressErrors.ToArray(); samples = $script:StressSamples.ToArray()
+                }
+                if ($script:StressReport) { ConvertTo-Json -InputObject $report -Depth 5 | Set-Content -LiteralPath $script:StressReport -Encoding UTF8 }
+                $script:ReallyExit = $true
+                $form.Close()
+            }
+        } catch {
+            [void]$script:StressErrors.Add($_.Exception.Message)
+        }
+    })
+}
 
 # Pump timer: drains worker logs, applies results, disposes finished runspaces
 $pump = New-Object System.Windows.Forms.Timer
@@ -1976,8 +2580,39 @@ $pump.add_Tick({
                 try { $t.PS.Dispose() } catch {}
                 try { $t.RS.Dispose() } catch {}
                 $script:Tasks.RemoveAt($i)
+            } elseif (([DateTime]::UtcNow - [DateTime]$script:Sync.Beat).TotalSeconds -gt 60) {
+                # Watchdog: workers post a progress beat to $Sync.Beat every
+                # 500 files. Long runs are legitimate (cleaning a %TEMP% with
+                # hundreds of thousands of folders takes minutes), so only a
+                # worker that made no progress for 60s - blocked in native
+                # I/O, where even the debugger cannot break in - is abandoned
+                # and the UI reset so the user can retry. BeginStop is async on
+                # purpose: Stop()/Dispose() could block just as badly if the
+                # thread is genuinely stuck.
+                # Name where it stalled: the category or the last folder with progress
+                Write-Log ('{0} [{1}]' -f (T 'logTaskTimeout'), $script:Sync.Step) 'error'
+                try { [void]$t.PS.BeginStop({}, $null) } catch {}
+                $script:Tasks.RemoveAt($i)
+                $script:Sync.Busy = $false
+                $script:Sync.ScanResult = $null
+                $btnOneClick.Enabled = $true
+                $btnOneClick.Text = (T 'btnOneClick')
+                $btnOneClick.Invalidate()
+                $btnAnalyze.Enabled = $true
+                $btnAnalyze.Text = (T 'btnAnalyze')
+                $script:Sync.DiskProgress = $null
+                $diskDesc.Text = (T 'diskDesc')
+                $lblJunkVal.Text = '—'
+                Update-Status
             }
         }
+
+        $dp = $script:Sync.DiskProgress
+        if ($dp) {
+            $txt = [string]::Format((T 'diskProgress'), $dp[0], $dp[1], $dp[2])
+            if ($diskDesc.Text -ne $txt) { $diskDesc.Text = $txt }
+        }
+        if ($script:TrapProc) { Complete-TrapAction }
 
         if ($script:Sync.ScanResult)  { $r = $script:Sync.ScanResult;  $script:Sync.ScanResult = $null;  Complete-Scan $r }
         if ($script:Sync.CleanResult) { $r = $script:Sync.CleanResult; $script:Sync.CleanResult = $null; Complete-Clean $r }
@@ -2058,8 +2693,23 @@ function Apply-Language {
     $lvDisk.Columns[0].Text = (T 'colFolder')
     $lvDisk.Columns[1].Text = (T 'colSize')
     $miShow.Text = (T 'trayShow')
+    $miTrap.Text = (T 'trayTrap')
     $miClean.Text = (T 'trayClean')
     $miExit.Text = (T 'trayExit')
+    $btnNavTrap.Text = (T 'navTrap')
+    $trapTitle.Text = (T 'trapTitle')
+    $trapTopTitle.Text = (T 'trapTopTitle')
+    $trapRecentTitle.Text = (T 'trapRecentTitle')
+    $btnTrapInstall.Text = (T 'btnTrapInstall')
+    $btnTrapRemove.Text = (T 'btnTrapRemove')
+    $btnTrapLog.Text = (T 'btnTrapLog')
+    $i = 0
+    foreach ($k in 'colProcess', 'colSpikes', 'colAvg', 'colLast') { $lvTrapTop.Columns[$i++].Text = (T $k) }
+    $i = 0
+    foreach ($k in 'colTime', 'colDur', 'colPeak', 'colCulprit', 'colNote') { $lvTrapRecent.Columns[$i++].Text = (T $k) }
+    if ($script:TrapLastState) { Set-TrapStateLabel $script:TrapLastState }
+    $script:TrapSig = $null
+    if ($script:ActiveView -eq 'trap') { Update-TrapView }
     Update-CategoryTexts
     Update-StatsUI
     Update-Status
@@ -2104,6 +2754,9 @@ $timer.add_Tick({
         $script:TickCount++
         if (($script:TickCount % 3) -eq 0) {
             $lblProcVal.Text = ([System.Diagnostics.Process]::GetProcesses().Length).ToString()
+        }
+        if ($script:ActiveView -eq 'trap' -and $form.Visible -and ($script:TickCount % 10) -eq 0) {
+            Update-TrapView
         }
 
         if ($script:pulse) {
@@ -2179,6 +2832,9 @@ $form.add_Load({
 
     if ($env:OPENRELAX_SMOKETEST) {
         $script:SmokeTimer.Start()
+    }
+    if ($script:StressCycles -gt 0) {
+        $script:StressTimer.Start()
     }
 })
 
