@@ -136,6 +136,7 @@ $script:Strings = @{
         trapStStopped    = 'Durmuş'
         trapStMissing    = 'Kurulu değil'
         trapStUpdate     = 'Güncelleme var'
+        trapStInsecure   = 'Güvenlik güncellemesi gerekli'
         trapDetail       = 'Son kontrol {0} · eşik %{1} · bu açılışta {2} sıçrama'
         trapDetailNone   = 'Kurulunca CPU %85 üstünde kaldığında sorumluları kaydeder; arayüz kapalıyken de çalışır.'
         btnTrapInstall   = 'Kur / Güncelle'
@@ -263,6 +264,7 @@ $script:Strings = @{
         trapStStopped    = 'Stopped'
         trapStMissing    = 'Not installed'
         trapStUpdate     = 'Update available'
+        trapStInsecure   = 'Security update required'
         trapDetail       = 'Last check {0} · threshold {1}% · {2} spikes since boot'
         trapDetailNone   = 'Once installed it records the culprits whenever CPU stays above 85%, even with this window closed.'
         btnTrapInstall   = 'Install / Update'
@@ -794,9 +796,26 @@ function Read-SharedText([string]$Path) {
     }
 }
 
+# True when an identity other than SYSTEM or Administrators may change the
+# path (write, delete or re-permission it): the SYSTEM task would then run
+# code that a standard-user process could have swapped in.
+function Test-TrapAclWritableByUsers([string]$Path) {
+    $trusted = @('S-1-5-18', 'S-1-5-32-544')
+    $write = [int]([System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership') -bor 0x10000000 -bor 0x40000000   # + GENERIC_ALL, GENERIC_WRITE
+    foreach ($ace in (Get-Acl -LiteralPath $Path).Access) {
+        if ($ace.AccessControlType -ne 'Allow') { continue }
+        if ($ace.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+        $sid = [string]$ace.IdentityReference
+        try { $sid = $ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
+        if ($trusted -contains $sid) { continue }
+        if (([int]$ace.FileSystemRights -band $write) -ne 0) { return $true }
+    }
+    return $false
+}
+
 function Get-TrapState {
     param([string]$Dir = $script:TrapDir)
-    $st = @{ Installed = $false; Running = $false; Outdated = $false; Beat = $null; Threshold = 85; Spikes = 0 }
+    $st = @{ Installed = $false; Running = $false; Outdated = $false; Insecure = $false; Beat = $null; Threshold = 85; Spikes = 0 }
     $taskKnown = $true; $taskFound = $false; $taskRunning = $false
     try {
         $svc = New-Object -ComObject Schedule.Service
@@ -834,6 +853,10 @@ function Get-TrapState {
     $installed = Join-Path $Dir 'fotokapan.ps1'
     if ($st.Installed -and (Test-Path -LiteralPath $installed) -and (Test-Path -LiteralPath $script:TrapScript)) {
         try { $st.Outdated = (Get-FileHash -LiteralPath $installed).Hash -ne (Get-FileHash -LiteralPath $script:TrapScript).Hash } catch {}
+    }
+    # Installs before 2.1.1 let the installing user change the script SYSTEM runs
+    if ($st.Installed -and (Test-Path -LiteralPath $installed)) {
+        try { $st.Insecure = (Test-TrapAclWritableByUsers $Dir) -or (Test-TrapAclWritableByUsers $installed) } catch {}
     }
     return $st
 }
@@ -2124,10 +2147,11 @@ function Get-TrapCulpritText([string]$Name) {
 }
 
 function Set-TrapStateLabel($St) {
-    if (-not $St.Installed)  { $key = 'trapStMissing'; $color = '#64748B' }
-    elseif ($St.Outdated)    { $key = 'trapStUpdate';  $color = '#3B82F6' }
-    elseif ($St.Running)     { $key = 'trapStRunning'; $color = '#10B981' }
-    else                     { $key = 'trapStStopped'; $color = '#F59E0B' }
+    if (-not $St.Installed)  { $key = 'trapStMissing';  $color = '#64748B' }
+    elseif ($St.Insecure)    { $key = 'trapStInsecure'; $color = '#F87171' }
+    elseif ($St.Outdated)    { $key = 'trapStUpdate';   $color = '#3B82F6' }
+    elseif ($St.Running)     { $key = 'trapStRunning';  $color = '#10B981' }
+    else                     { $key = 'trapStStopped';  $color = '#F59E0B' }
     $lblTrapState.Text = (T $key)
     $lblTrapState.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($color)
     if ($St.Installed -and $St.Beat) {
