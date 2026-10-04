@@ -48,7 +48,7 @@
 14. **`Add-Type -ErrorAction SilentlyContinue` derleme hatasını maskeliyor.** C# derlenemezse `[Win32Helper]` çağrıları anlaşılmaz şekilde patlar. → SilentlyContinue kaldır, hata mesajı göster.
 15. **Timer tick'indeki boş `catch` her hatayı yutuyor.** Monitoring sessizce bozulabilir. → En azından ilk hatayı loglayıp devam et.
 16. **Kapanışta temizlik yok.** `$timer.Stop()`, `$cpuCounter.Dispose()` yapılmıyor; her tick `Get-Process` tüm süreç nesnelerini açıyor. → FormClosed'da dispose; süreç sayısını `(Get-Process).Count` yerine daha hafif yolla al.
-17. **README'de yerel `file:///c:/Users/pc/...` linkleri var.** GitHub'da kırık ve kişisel yol sızdırıyor. → Göreli linke çevir.
+17. **README'de yerel `file://` linkleri var.** GitHub'da kırık ve kişisel çalışma dizini sızdırıyor. → Göreli linke çevir.
 
 ### Düşük / Kozmetik
 

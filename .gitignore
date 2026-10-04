@@ -1,0 +1,11 @@
+# Local editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local verification output
+*.log
+TestResults/
+coverage/

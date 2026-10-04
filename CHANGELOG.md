@@ -10,6 +10,9 @@ Long-term-support release: stabilization of 2.0 plus the Fotokapan CPU spike tra
 - **Cleaning buffered and sorted every entry before deleting anything.** Deletion is streamed; emptied folders are removed afterwards, junctions are never entered or removed.
 - **The fixed 35 s watchdog cancelled legitimate long runs.** Workers post progress beats; a task is abandoned only after 60 s without progress, and the log names where it stalled.
 - Recycle Bin size was read through Shell COM, which can block a worker; it is now read from `$Recycle.Bin` directly.
+- Windows Update cleanup stops only the update services that were running, aborts if one cannot be stopped, and restores their prior state (#5).
+- "Restart as Administrator" left a console window behind whose closing killed the app; the elevated instance now starts hidden like `launch.bat`.
+- CI's self-test check reads the expected version from the script instead of a hard-coded `v2.0`.
 
 ### Added
 - **Fotokapan** (`fotokapan.ps1`): SYSTEM scheduled task that records the culprits of CPU spikes (burst-window per-process CPU, parents, command lines with secrets masked, new processes, interrupt/DPC share, Defender scan state or a 30 s Defender performance report). Writes a human-readable log, a JSONL record stream and a heartbeat.

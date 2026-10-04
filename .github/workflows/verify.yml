@@ -1,0 +1,31 @@
+name: Windows verification
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openrelax-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parser-and-self-test:
+    name: Parser + safety contracts
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify parser, service-state guard and read-only self-test
+        shell: powershell
+        run: .\tests\verify.ps1

@@ -1,87 +1,218 @@
-# OpenRelax PC Care 🚀
+# OpenRelax PC Care
 
-**OpenRelax** is a lightweight, safe, and beautiful open-source Windows system optimization utility built with PowerShell and Windows Forms — a single script, no installation. It reclaims RAM, cleans application/browser caches, records who causes CPU spikes, and stays out of your way in the system tray.
+[![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
 
-**Sürüm / Version: 2.1 LTS** — see [CHANGELOG.md](CHANGELOG.md).
+[Open-source portfolio](https://www.mehmeterendereli.com/en/open-source) · [Maintainer profile](https://github.com/mehmeterendereli)
 
----
+A portable Windows maintenance utility built with **PowerShell and Windows Forms**. It runs from source, requires no installer, and keeps its cleanup targets and safety boundaries visible in one inspectable script.
 
-## Özellikler / Features
+**Current status:** source version 2.1 LTS ([changelog](CHANGELOG.md)) · focused Windows utility · MIT licensed · automated parser/self-test verification · local stress tests · no signed binary release
 
-### 🇹🇷 Türkçe
-- **Tek Tıkla Sistem Bakımı:** Seçili kategorilerdeki tüm temizlik ve RAM optimizasyonu tek butonla, arka planda çalışır — arayüz asla donmaz.
-- **Seçilebilir Temizlik Kategorileri:** Geçici dosyalar, tarayıcı önbellekleri (Chrome, Edge, Brave, Opera/Opera GX, Firefox — tüm profiller), Discord, GPU shader önbellekleri, Windows hata raporları (WER), Windows Update önbelleği, GPU kurulum kalıntıları ve Geri Dönüşüm Kutusu. Her kategori Ayarlar sekmesinden açılıp kapatılabilir.
-- **Güvenli RAM Optimizasyonu:** Native Windows API'leri ile süreçlerin kullanmadığı fiziksel bellek geri kazanılır; kritik sistem süreçleri asla dokunulmaz.
-- **Akıllı Oto RAM Boşaltma:** RAM belirlediğiniz eşiği aşınca otomatik temizlik — 5 dakikalık bekleme süresi ve histerezis ile sistemi yormadan.
-- **Sistem Tepsisi:** Pencereyi kapatınca uygulama tepside yaşamaya devam eder (ayarlardan kapatılabilir); tepsiden tek tıkla bakım yapılabilir.
-- **Windows ile Başlatma & Haftalık Otomatik Temizlik:** Ayarlardan tek tikle etkinleştirilir.
-- **Disk Analizi:** Kullanıcı profilinizdeki en büyük 10 klasörü gösterir (salt okunur, ilerleme göstergeli).
-- **Fotokapan (CPU sıçrama kaydedici):** CPU %85 üstünde kaldığında sorumlu süreçleri, sürücü (kesme/DPC) payını ve Defender taramalarını kaydeder. Fotokapan sekmesi son 7 günün en sık sorumlularını ve son sıçramaları listeler; kurma/güncelleme/kaldırma oradan yapılır.
-- **İstatistikler:** Bugüne kadar toplam temizlenen alan ve bakım sayısı kaydedilir.
-- **TR / EN Dil Desteği** ve gerçek zamanlı CPU/RAM/uptime monitörü.
+> OpenRelax is not a registry “optimizer” and it does not promise permanent RAM gains. It cleans regenerable files, trims eligible process working sets, and reports what happened.
 
-### 🇺🇸 English
-- **One-Click Maintenance:** All cleanup and RAM optimization runs on a background thread — the UI never freezes.
-- **Selectable Cleanup Categories:** Temp files, browser caches (Chrome, Edge, Brave, Opera/Opera GX, Firefox — all profiles), Discord, GPU shader caches, Windows Error Reporting, Windows Update cache, GPU installer leftovers, and the Recycle Bin. Toggle each category in Settings.
-- **Safe RAM Optimization:** Uses native Windows APIs to trim idle working sets; critical system processes are never touched.
-- **Smart Auto-Boost:** Automatically trims RAM when usage crosses your threshold — with a 5-minute cooldown and hysteresis so it never thrashes your system.
-- **System Tray:** Closing the window keeps OpenRelax alive in the tray (optional); run maintenance straight from the tray menu.
-- **Run at Startup & Weekly Scheduled Cleanup:** One checkbox each in Settings.
-- **Disk Analysis:** Shows the 10 largest folders in your user profile (read-only, with progress).
-- **Spike Trap (CPU spike recorder):** Records the culprit processes, driver (interrupt/DPC) share and Defender scans whenever CPU stays above 85%. The Spike Trap tab lists the top culprits of the last 7 days and the recent spikes, and installs/updates/removes the trap.
-- **Statistics:** Tracks total space cleaned and maintenance runs over time.
-- **TR / EN language support** plus a real-time CPU/RAM/uptime monitor.
+## What you can inspect
 
----
-
-## Nasıl Çalıştırılır? / How to Run
-
-1. Double-click **[launch.bat](launch.bat)** — the console window closes itself and the dark-themed OpenRelax window opens.
-2. Optional command-line modes for [openrelax.ps1](openrelax.ps1):
-   - `-StartMinimized` — start hidden in the system tray (used by the startup entry)
-   - `-AutoClean` — headless cleanup using your saved settings (used by the weekly scheduled task)
-   - `-SelfTest` — read-only scan that prints what would be cleaned, without deleting anything
-
-Settings are stored in `%APPDATA%\OpenRelax\settings.json`.
-
-### Fotokapan (CPU spike trap)
-
-[fotokapan.ps1](fotokapan.ps1) runs independently of the GUI as a SYSTEM scheduled task, so it keeps recording while OpenRelax is closed or the machine is pegged. When total CPU stays ≥85% for 4 s it measures the burst itself and logs the top processes (CPU %, parent, command line), recently started processes and unattributed interrupt/DPC time. If Microsoft Defender is a top consumer it notes a running on-demand scan, or otherwise attaches a 30 s Defender performance report (at most every 6 h).
-
-- Install / update / remove: the buttons on the **Fotokapan** tab (asks for administrator rights), or in an admin PowerShell `.\fotokapan.ps1 -Install` / `.\fotokapan.ps1 -Uninstall`
-- Output in `C:\ProgramData\OpenRelax\Fotokapan\` (readable only by SYSTEM, Administrators and the installing user):
-  - `fotokapan-YYYY-MM.log` — human-readable report (**Open log** button)
-  - `spikes-YYYY-MM.jsonl` — one JSON record per line (`monitor`, `start`, `ongoing`, `end`); the tab reads only this
-  - `durum.json` — heartbeat, rewritten every minute
-
----
-
-## Testler / Tests
-
-Stress tests live in [tests/](tests) (Windows PowerShell 5.1, run from the repo root):
-
-| Script | What it checks |
+| Area | Concrete implementation |
 |---|---|
-| `tests\engine-stress.ps1` | Scan/clean engine in a worker runspace on a 30 000-file synthetic tree with traps (junction loop, junction to an outside sentinel, held-open file, < 24 h files, read-only/hidden, bracket/Turkish names, deep and > 260-char paths): nothing outside the tree is touched, progress beats keep coming, memory stays bounded. |
-| `tests\fotokapan-stress.ps1` | A private Fotokapan instance through a storm of CPU bursts: every burst caught and attributed, JSONL contract valid, monitor overhead and handles/memory stable, the OpenRelax reader survives damaged lines. Pause the installed trap first (`Stop-ScheduledTask 'OpenRelax Fotokapan'`) to keep the synthetic bursts out of its statistics. |
-| `tests\gui-stress.ps1` | Drives the real GUI handlers for N cycles (view switches, language re-apply, background scans, Fotokapan list re-render on 300 synthetic spikes) and checks for handler errors and GDI/USER/handle/memory leaks, then starts and closes the app repeatedly. The window is visible while it runs; nothing is cleaned and no setting is saved. |
+| **Cleanup engine** | Explicit path lists for temporary files, browser/application caches, GPU caches, Windows Error Reporting, update cache and installer leftovers |
+| **Safety model** | Administrator-only targets are marked and skipped without elevation; locked files are skipped; sensitive profile data and diagnostic folders are excluded |
+| **Execution** | Cleanup, scanning and disk analysis run in background PowerShell runspaces so the WinForms UI remains responsive |
+| **Operating modes** | Interactive GUI, tray/minimized startup, scheduled headless cleanup and read-only `-SelfTest` |
+| **CPU spike trap** | `fotokapan.ps1` runs as a SYSTEM scheduled task and records which processes (or drivers) caused each CPU spike; the **Fotokapan** tab shows the top culprits and recent spikes |
+| **Verification** | Windows CI parses the complete script, runs the real `-SelfTest` path and proves that settings and AutoClean log state remain unchanged; local stress tests cover the engine, the spike trap and the GUI |
+| **Persistence** | Settings and aggregate usage statistics are stored in `%APPDATA%\OpenRelax\settings.json` |
 
-Test hooks (environment variables): `OPENRELAX_SMOKETEST=1|<seconds>` auto-close, `OPENRELAX_STRESS=<cycles>` with `OPENRELAX_STRESS_REPORT=<file.json>`, `OPENRELAX_TRAP_DIR=<folder>`.
+## Execution map
 
----
+```mermaid
+flowchart LR
+    USER[User or scheduled task] --> MODE{Mode}
+    MODE -->|GUI| SELECT[Select categories]
+    MODE -->|SelfTest| SCAN[Read-only scan]
+    MODE -->|AutoClean| CLEAN[Headless cleanup]
+    SELECT --> WORKER[Background runspace]
+    SCAN --> ENGINE[Shared cleanup engine]
+    CLEAN --> ENGINE
+    WORKER --> ENGINE
+    ENGINE --> GUARDS[Privilege and path guards]
+    GUARDS --> RESULT[Log, result and statistics]
+```
 
-## Güvenlik Felsefesi / Safety Philosophy
+The GUI and headless modes use the same serialized engine functions rather than maintaining separate cleanup implementations.
 
-OpenRelax deliberately does **not** clean:
+## Quick start
 
-- `Windows\Prefetch` — deleting it *slows down* app launches; Windows manages it itself.
-- `Windows\Logs` & `Panther` — needed for diagnostics and upgrade rollback.
-- Browser profiles/bookmarks/history — only regenerable cache directories are targeted.
+### Open the interface
 
-The Windows Update cache is cleaned only when running as Administrator, and only after temporarily stopping the update services (they are restarted afterwards). Locked or in-use files are always skipped silently.
+Clone or download the repository, then run:
 
----
+```bat
+launch.bat
+```
 
-## Lisans / License
+The launcher starts `openrelax.ps1` and opens the Windows Forms interface.
 
-This project is licensed under the MIT License.
+### Inspect without deleting anything
+
+Run the read-only engine scan first:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -SelfTest
+```
+
+`-SelfTest` reports the selected targets and what is detectable on the current machine. It is a practical smoke check, **not** a complete unit-test suite.
+
+### Other modes
+
+```powershell
+# Start hidden in the system tray
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -StartMinimized
+
+# Run cleanup headlessly with saved settings
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -AutoClean
+```
+
+`-AutoClean` can delete files according to the saved category settings. Use `-SelfTest` first when evaluating the tool on a new system.
+
+### Run as administrator
+
+Administrator rights are needed only for the admin-only cleanup targets (system temp, Windows Error Reporting, Windows Update cache) and for installing or removing the CPU spike trap. Either right-click `launch.bat` → **Run as administrator**, or use **Settings → Restart as administrator** inside the app.
+
+## Fotokapan (CPU spike trap)
+
+Intermittent 100 % CPU is hard to diagnose: by the time Task Manager is open, the burst is often over, and a starved UI thread cannot sample during it. `fotokapan.ps1` therefore runs outside the GUI as a SYSTEM scheduled task (above-normal priority, no time limit):
+
+- When total CPU stays at or above 85 % for 4 seconds it measures **the burst itself** (per-process CPU from the first hot sample), plus parent processes, command lines (secrets masked), processes started in the last two minutes and CPU time no process accounts for (interrupts/DPCs — drivers).
+- If Microsoft Defender is among the top consumers it records whether an on-demand scan is running, or otherwise attaches a 30-second Defender performance report (at most every 6 hours).
+- Output lives in `C:\ProgramData\OpenRelax\Fotokapan\`, readable only by SYSTEM, Administrators and the installing user: `fotokapan-YYYY-MM.log` (human-readable), `spikes-YYYY-MM.jsonl` (one JSON record per line — the contract the GUI reads) and `durum.json` (heartbeat, rewritten every minute).
+
+Install, update or remove it from the **Fotokapan** tab (asks for elevation when needed) or from an elevated PowerShell:
+
+```powershell
+.\fotokapan.ps1 -Install     # copy to ProgramData, register and start the task
+.\fotokapan.ps1 -Uninstall   # remove the task; recorded logs are kept
+```
+
+## Automated verification
+
+Every push and pull request targeting `main` runs on a GitHub-hosted Windows machine. The verification job:
+
+1. Parses the complete `openrelax.ps1` file with PowerShell's language parser and fails on any syntax error.
+2. Starts the real application in a separate Windows PowerShell process with `-SelfTest`.
+3. Requires a zero exit code, the versioned self-test banner and the final `Self-test OK` marker.
+4. Exercises the Windows Update service-state contract without deleting files: only services that were running may be stopped, cleanup is blocked after a stop failure, and prior states must be restored.
+5. Fingerprints `%APPDATA%\OpenRelax\settings.json` and `autoclean.log` before and after execution, failing if the supposedly read-only path creates, removes or modifies either file.
+
+Run the same entrypoint locally:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
+```
+
+This proves that the checked-in script parses, its non-destructive scan path executes successfully on Windows, its Windows Update service-state guard behaves deterministically, and its persistent settings/log state stays unchanged. It does **not** replace comprehensive unit tests for every cleanup function or destructive-mode testing on every Windows configuration.
+
+### Stress tests (local)
+
+Three stress tests in `tests/` exercise what CI does not. They are run locally before a release (the GUI test needs an interactive desktop):
+
+| Script | What it proves |
+|---|---|
+| `tests\engine-stress.ps1` | The real scan/clean engine, in a worker runspace as the GUI uses it, on a 30 000-file synthetic tree with traps — a junction loop, a junction to an outside sentinel, a held-open file, files younger than 24 h, read-only/hidden files, bracket/Turkish names, deep and over-long paths. Nothing outside the tree is touched, progress beats keep coming and memory stays bounded. |
+| `tests\fotokapan-stress.ps1` | A private spike-trap instance through a storm of CPU bursts: every burst caught and attributed to the right process, JSONL contract valid, heartbeat refreshed, monitor overhead and handles/memory stable, and the GUI's reader survives damaged lines. Pause an installed trap first (`Stop-ScheduledTask 'OpenRelax Fotokapan'`) to keep the synthetic bursts out of its statistics. |
+| `tests\gui-stress.ps1` | Drives the real GUI handlers for N cycles — view switches, language re-apply, background scans, Fotokapan list re-rendering over 300 synthetic spikes — and fails on handler errors or GDI/USER/handle/memory growth; then starts and closes the app repeatedly. Nothing is cleaned and no setting is saved. |
+
+The GUI test uses environment hooks that are inert otherwise: `OPENRELAX_STRESS=<cycles>` with `OPENRELAX_STRESS_REPORT=<file.json>`, `OPENRELAX_SMOKETEST=1|<seconds>` and `OPENRELAX_TRAP_DIR=<folder>`.
+
+## Safety contract
+
+OpenRelax deliberately avoids broad “delete everything” behaviour:
+
+- **Windows Prefetch is not cleaned.** Windows manages it, and removing it can make application launches slower.
+- **`Windows\Logs` and `Windows\Panther` are not cleaned.** They may be needed for diagnostics and upgrade rollback.
+- **Browser bookmarks, history and profile data are not targeted.** Only known regenerable cache directories are included.
+- **Windows Update cleanup is disabled by default** and requires administrator rights. When enabled, the related services are stopped before cleanup and restarted afterward.
+- **Administrator-only paths are skipped** when OpenRelax is not elevated.
+- **Locked or in-use files are skipped** instead of being forced or scheduled for deletion.
+- **Recently changed temp files are kept.** Files in the temp folders that changed within the last 24 hours belong to running applications and are neither counted nor deleted.
+- **Junctions are never followed or removed**, so cleaning a folder cannot reach data that a junction points to.
+- **Scans are time-budgeted.** A huge temp folder is reported as a lower bound (`≥ X GB`) instead of stalling; background work reports progress, and a worker is abandoned only after 60 seconds without any.
+- **Critical Windows processes are excluded** from working-set trimming.
+- **RAM reclamation is temporary by nature.** Applications can request those pages again as their workload continues.
+
+The source remains the final authority. Review `Get-JunkCategories`, `Remove-JunkPaths` and `Invoke-RamTrim` in `openrelax.ps1` before deploying it in a managed environment.
+
+## Features
+
+- One-click maintenance for selected categories
+- User and system temporary-file scanning
+- Chrome, Edge, Brave, Opera/Opera GX and Firefox cache cleanup across detected profiles
+- Discord and GPU shader-cache cleanup
+- Optional Windows Error Reporting, Windows Update and GPU-installer cleanup
+- Recycle Bin cleanup
+- Native Windows API working-set trimming with a critical-process exclusion list
+- Automatic RAM threshold with five-minute cooldown and hysteresis
+- System tray operation and start-with-Windows option
+- Weekly scheduled cleanup using saved settings
+- Read-only largest-folder analysis for the user profile, with progress
+- Fotokapan CPU spike trap with a GUI tab: top culprits of the last 7 days, recent spikes, install/update/remove, open log
+- Aggregate cleaned-space and maintenance-run statistics
+- Turkish and English interface strings
+- Live CPU, RAM and uptime display
+
+## Repository map
+
+```text
+openrelax.ps1                  Application, UI, engine and operating modes
+fotokapan.ps1                  CPU spike trap (SYSTEM scheduled task)
+launch.bat                     No-install Windows launcher
+tests/verify.ps1               Parser + real read-only self-test entrypoint (CI)
+tests/*-stress.ps1             Engine, spike-trap and GUI stress tests (local)
+CHANGELOG.md                   Release notes
+.github/workflows/verify.yml   Windows CI definition
+docs/social-preview.png        Repository social-preview upload asset
+README.md                      Behaviour, safety contract and usage
+PLAN.md                        Original implementation plan and design notes
+LICENSE                        MIT license text
+```
+
+Keeping the application in one script makes it easy to audit and copy. It also creates a real maintenance limit: the project is not yet split into independently testable modules.
+
+## Current limits
+
+- Windows and Windows Forms only
+- Distributed as source; there is currently no signed installer or signed executable release
+- Windows CI covers parser correctness, the real read-only self-test and an isolated Windows Update service-state contract; the engine, spike-trap and GUI stress tests run locally, not in CI
+- Installing the spike trap requires administrator rights; it records from the moment it is installed
+- The application is a single large PowerShell script, which keeps deployment simple but reduces modular testability
+- Cleanup results vary by permissions, active applications and machine configuration
+- Working-set trimming should not be interpreted as a permanent performance or memory-capacity increase
+
+These limits are stated intentionally so the repository shows what exists now—not what a future release might become.
+
+## Türkçe özet
+
+OpenRelax; geçici dosyaları ve bilinen uygulama önbelleklerini temizleyen, uygun süreçlerin kullanılmayan çalışma setlerini daraltan ve Windows sistem tepsisinde çalışabilen açık kaynak bir bakım aracıdır.
+
+İlk denemede hiçbir dosya silmeden kontrol etmek için:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\openrelax.ps1 -SelfTest
+```
+
+Aynı parser ve salt-okunur uygulama kontrolünü yerelde çalıştırmak için:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
+```
+
+CI, `SelfTest` çalışırken ayar dosyası ile AutoClean günlüğünün oluşturulmadığını, silinmediğini veya değiştirilmediğini de doğrular.
+
+Araç; Prefetch klasörünü, Windows tanılama günlüklerini, tarayıcı geçmişini, yer imlerini ve kullanıcı profil verilerini temizlemez. Windows Update temizliği varsayılan olarak kapalıdır ve yalnızca yönetici yetkisiyle çalışır. Geçici klasörlerde son 24 saatte değişen dosyalara ve junction'ların hedeflerine dokunulmaz.
+
+**Fotokapan (CPU sıçrama kaydedici):** Ara ara %100'e çıkan CPU'nun sorumlusunu bulmak için `fotokapan.ps1` arayüzden bağımsız, SYSTEM görevi olarak çalışır. CPU 4 saniye %85 üstünde kalınca sıçramanın kendisini ölçer; sorumlu süreçleri, ebeveynlerini, komut satırlarını (gizli değerler maskelenir), sürücü (kesme/DPC) payını ve Defender taramalarını kaydeder. Uygulamadaki **Fotokapan** sekmesi son 7 günün en sık sorumlularını ve son sıçramaları gösterir; kurma, güncelleme ve kaldırma oradan yapılır.
+
+Yönetici olarak açmak için `launch.bat` dosyasına sağ tıklayıp **Yönetici olarak çalıştır**'ı seçin ya da uygulamada **Ayarlar → Yönetici olarak yeniden başlat**'ı kullanın.
+
+## License
+
+Released under the [MIT License](LICENSE).
