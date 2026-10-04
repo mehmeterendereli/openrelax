@@ -148,6 +148,11 @@ $script:Strings = @{
         btnTrapLog       = 'Log''u aç'
         trapTopTitle     = 'EN SIK SORUMLULAR · SON 7 GÜN'
         trapRecentTitle  = 'SON SIÇRAMALAR'
+        trapPageSummary  = 'Özet'
+        trapPageRecords  = 'Kayıtlar'
+        trapDiagTitle    = 'TEŞHİS · SON 7 GÜN'
+        trapHoursTitle   = 'SAATE GÖRE DAĞILIM'
+        trapNoteScheduled = 'zamanlanmış görev'
         colProcess       = 'Süreç'
         colSpikes        = 'Sıçrama'
         colAvg           = 'Ort. pay'
@@ -292,6 +297,11 @@ $script:Strings = @{
         btnTrapLog       = 'Open log'
         trapTopTitle     = 'TOP CULPRITS · LAST 7 DAYS'
         trapRecentTitle  = 'RECENT SPIKES'
+        trapPageSummary  = 'Summary'
+        trapPageRecords  = 'Records'
+        trapDiagTitle    = 'DIAGNOSIS · LAST 7 DAYS'
+        trapHoursTitle   = 'BY HOUR OF DAY'
+        trapNoteScheduled = 'scheduled task'
         colProcess       = 'Process'
         colSpikes        = 'Spikes'
         colAvg           = 'Avg share'
@@ -2361,18 +2371,121 @@ $lblTrapDetail.Size = New-Object System.Drawing.Size(284, 36)
 $btnTrapInstall = New-TrapButton $trapCard 304 56 '#3B82F6'
 $btnTrapRemove = New-TrapButton $trapCard 416 56 '#F87171'
 $btnTrapLog = New-TrapButton $trapCard 528 56 '#94A3B8'
+
+# Page switch inside the status card: summary (diagnosis) / records (every spike)
+function New-TrapPageButton($X, [string]$Page) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Size = New-Object System.Drawing.Size(80, 24)
+    $b.Location = New-Object System.Drawing.Point($X, 8)
+    $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $b.FlatAppearance.BorderSize = 0
+    $b.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+    $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $b.Tag = $Page
+    $trapCard.Controls.Add($b)
+    Set-RoundedRegion $b 8
+    return $b
+}
+$btnTrapPageSummary = New-TrapPageButton 468 'summary'
+$btnTrapPageRecords = New-TrapPageButton 552 'records'
 Register-CardHover $trapCard
 
-$trapTopCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 106)) (New-Object System.Drawing.Size(644, 124))
+function New-TrapPage {
+    $p = New-Object System.Windows.Forms.Panel
+    $p.Location = New-Object System.Drawing.Point(0, 106)
+    $p.Size = New-Object System.Drawing.Size(644, 306)
+    $p.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
+    $viewTrap.Controls.Add($p)
+    return $p
+}
+$trapPageSummary = New-TrapPage
+$trapPageRecords = New-TrapPage
+$trapPageRecords.Visible = $false
+
+# Summary page: full-width diagnosis (advice texts can run to ~200 characters),
+# then the culprit table with the hour-of-day distribution beside it
+$trapDiagCard = Create-Card $trapPageSummary (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(644, 168))
+$trapDiagTitle = New-TrapLabel $trapDiagCard 12 8 7.5 $true '#94A3B8'
+$lblTrapDiag = @()
+foreach ($i in 0..2) {
+    $l = New-TrapLabel $trapDiagCard 12 (28 + $i * 44) 8 $false '#CBD5E1'
+    $l.AutoSize = $false
+    $l.Size = New-Object System.Drawing.Size(620, 42)
+    $lblTrapDiag += $l
+}
+Register-CardHover $trapDiagCard
+
+$trapTopCard = Create-Card $trapPageSummary (New-Object System.Drawing.Point(0, 174)) (New-Object System.Drawing.Size(644, 132))
 $trapTopTitle = New-TrapLabel $trapTopCard 12 8 7.5 $true '#94A3B8'
 # Column widths leave room for the vertical scrollbar (no horizontal one)
-$lvTrapTop = New-TrapList $trapTopCard 12 28 620 88 @(290, 80, 90, 120)
+$lvTrapTop = New-TrapList $trapTopCard 12 28 392 96 @(170, 55, 70, 75)
+$trapHoursTitle = New-TrapLabel $trapTopCard 416 8 7.5 $true '#94A3B8'
+$pnlTrapHours = New-Object System.Windows.Forms.Panel
+$pnlTrapHours.Location = New-Object System.Drawing.Point(416, 28)
+$pnlTrapHours.Size = New-Object System.Drawing.Size(216, 96)
+$pnlTrapHours.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
+$trapTopCard.Controls.Add($pnlTrapHours)
+$script:TrapHours = New-Object int[] 24
+# 24 bars, the busiest hour in amber; every GDI object is disposed per paint
+$pnlTrapHours.add_Paint({
+    param($sender, $e)
+    $h = $script:TrapHours
+    $max = ($h | Measure-Object -Maximum).Maximum
+    $chartH = $sender.Height - 16
+    $barW = [Math]::Floor($sender.Width / 24)
+    $bar = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#3B82F6'))
+    $peak = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#F59E0B'))
+    $axis = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#64748B'))
+    $font = New-Object System.Drawing.Font('Segoe UI', 7)
+    try {
+        for ($i = 0; $i -lt 24; $i++) {
+            $x = $i * $barW
+            if ($max -gt 0 -and $h[$i] -gt 0) {
+                $bh = [Math]::Max(2, [int]($chartH * $h[$i] / $max))
+                $brush = $bar
+                if ($h[$i] -eq $max) { $brush = $peak }
+                $e.Graphics.FillRectangle($brush, $x + 1, $chartH - $bh, $barW - 2, $bh)
+            }
+            if (($i % 6) -eq 0) { $e.Graphics.DrawString(('{0:D2}' -f $i), $font, $axis, [single]$x, [single]($chartH + 2)) }
+        }
+    } finally {
+        $bar.Dispose(); $peak.Dispose(); $axis.Dispose(); $font.Dispose()
+    }
+})
 Register-CardHover $trapTopCard
 
-$trapRecentCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 238)) (New-Object System.Drawing.Size(644, 166))
+# Records page: every spike of the last 7 days
+$trapRecentCard = Create-Card $trapPageRecords (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(644, 306))
 $trapRecentTitle = New-TrapLabel $trapRecentCard 12 8 7.5 $true '#94A3B8'
-$lvTrapRecent = New-TrapList $trapRecentCard 12 28 620 130 @(110, 64, 56, 246, 110)
+$lvTrapRecent = New-TrapList $trapRecentCard 12 36 620 262 @(110, 64, 56, 246, 110)
 Register-CardHover $trapRecentCard
+
+function Show-TrapPage([string]$Page) {
+    $script:TrapPage = $Page
+    $trapPageSummary.Visible = ($Page -eq 'summary')
+    $trapPageRecords.Visible = ($Page -eq 'records')
+    foreach ($b in $btnTrapPageSummary, $btnTrapPageRecords) {
+        if ($b.Tag -eq $Page) {
+            $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
+            $b.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#1E293B')
+        } else {
+            $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+            $b.BackColor = [System.Drawing.Color]::Transparent
+        }
+    }
+}
+$script:TrapPageClick = {
+    param($sender, $e)
+    Show-TrapPage $sender.Tag
+}
+$btnTrapPageSummary.add_Click($script:TrapPageClick)
+$btnTrapPageRecords.add_Click($script:TrapPageClick)
+Show-TrapPage 'summary'
+
+$script:TrapDiagColors = @{
+    defender = '#F59E0B'; drivers = '#F87171'; game = '#A78BFA'; devtools = '#38BDF8'
+    browser = '#34D399'; windows = '#94A3B8'; scheduled = '#FBBF24'; other = '#CBD5E1'
+}
 
 $script:TrapProc = $null
 $script:TrapLastState = $null
@@ -2400,7 +2513,24 @@ function Update-TrapButtons {
     $btnTrapRemove.Enabled = $idle -and $script:TrapLastState -and $script:TrapLastState.Installed
 }
 
-function Update-TrapLists($Episodes, $St) {
+function Update-TrapContent($Episodes, $St) {
+    # Diagnosis: the three largest findings, coloured by category
+    $findings = @(Get-TrapDiagnosis $Episodes)
+    for ($i = 0; $i -lt 3; $i++) {
+        $l = $lblTrapDiag[$i]
+        if ($i -lt $findings.Count) {
+            $l.Text = [char]0x2022 + ' ' + (Format-TrapFinding $findings[$i])
+            $l.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($script:TrapDiagColors[[string]$findings[$i].Category])
+        } elseif ($i -eq 0) {
+            $l.Text = (T 'diag_none')
+            $l.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+        } else {
+            $l.Text = ''
+        }
+    }
+    $script:TrapHours = Get-TrapHourHistogram $Episodes
+    $pnlTrapHours.Invalidate()
+
     $lvTrapTop.BeginUpdate()
     $lvTrapTop.Items.Clear()
     foreach ($c in (Get-TrapCulprits $Episodes | Select-Object -First 8)) {
@@ -2422,9 +2552,12 @@ function Update-TrapLists($Episodes, $St) {
         else { $dur = (T 'trapOngoing') }
         $peak = ''
         if ($null -ne $ep.Peak) { $peak = '{0}%' -f $ep.Peak }
-        $note = ''
-        if ($ep.Defender -eq 'scan') { $note = (T 'trapNoteScan') }
-        elseif ($ep.Defender -eq 'realtime') { $note = (T 'trapNoteRealtime') }
+        $notes = @()
+        if ($ep.Defender -eq 'scan') { $notes += (T 'trapNoteScan') }
+        elseif ($ep.Defender -eq 'realtime') { $notes += (T 'trapNoteRealtime') }
+        $top0 = @($ep.Start.top | Where-Object { $_ }) | Select-Object -First 1
+        if (Test-TrapScheduled $top0) { $notes += (T 'trapNoteScheduled') }
+        $note = $notes -join ', '
         $item = New-Object System.Windows.Forms.ListViewItem((ConvertFrom-TrapTime $ep.Start.t).ToString('dd.MM HH:mm:ss'))
         [void]$item.SubItems.Add($dur)
         [void]$item.SubItems.Add($peak)
@@ -2447,7 +2580,7 @@ function Update-TrapView {
         $sig = '{0}|{1}|{2}|{3}' -f $records.Count, $last, $script:Settings.language, $st.Running
         if ($sig -ne $script:TrapSig) {
             $script:TrapSig = $sig
-            Update-TrapLists (Get-TrapEpisodes $records) $st
+            Update-TrapContent (Get-TrapEpisodes $records) $st
         }
         Update-TrapButtons
     } catch {
@@ -2812,8 +2945,12 @@ if ($script:StressCycles -gt 0) {
             if ($cycle -lt $script:StressCycles) {
                 $navButtons[$s % 4].PerformClick()
                 if (($s % 4) -eq 3) {
-                    # The Fotokapan view is up: snapshot it once per language
-                    if ($cycle -lt 2) { Save-StressSnapshot ('stress-trap-{0}.png' -f $script:Settings.language) }
+                    # The Fotokapan view is up: switch its page (summary twice, then
+                    # records twice - the language alternates per cycle) and snapshot
+                    # each page in both languages once
+                    $page = @('summary', 'summary', 'records', 'records')[$cycle % 4]
+                    Show-TrapPage $page
+                    if ($cycle -lt 4) { Save-StressSnapshot ('stress-trap-{0}-{1}.png' -f $page, $script:Settings.language) }
                     if ($script:Settings.language -eq 'en') { $script:Settings.language = 'tr' } else { $script:Settings.language = 'en' }
                     Apply-Language
                     if (-not $script:Sync.Busy -and ($cycle % 3) -eq 0) { Start-ScanTask; $script:StressScans++ }
@@ -3002,6 +3139,10 @@ function Apply-Language {
     $trapTitle.Text = (T 'trapTitle')
     $trapTopTitle.Text = (T 'trapTopTitle')
     $trapRecentTitle.Text = (T 'trapRecentTitle')
+    $trapDiagTitle.Text = (T 'trapDiagTitle')
+    $trapHoursTitle.Text = (T 'trapHoursTitle')
+    $btnTrapPageSummary.Text = (T 'trapPageSummary')
+    $btnTrapPageRecords.Text = (T 'trapPageRecords')
     $btnTrapInstall.Text = (T 'btnTrapInstall')
     $btnTrapRemove.Text = (T 'btnTrapRemove')
     $btnTrapLog.Text = (T 'btnTrapLog')

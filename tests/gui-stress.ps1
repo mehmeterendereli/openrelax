@@ -41,10 +41,18 @@ for ($i = 0; $i -lt 300; $i++) {
     $name = $procNames[$i % $procNames.Count]
     $attributed = 90
     if (($i % 17) -eq 0) { $attributed = 30 }   # mostly interrupts/DPC -> "drivers"
-    $defender = $null
+    $defender = $null; $defenderTop = $null
     if ($name -eq 'MsMpEng.exe') { $defender = @('scan', 'realtime')[$i % 2] }
-    $top = @([ordered]@{ name = $name; pid = 1000 + $i; pct = 40 + ($i % 50); parent = 'services.exe'; cmd = "$name --synthetic" })
-    [void]$sb.Append((ConvertTo-Json -Compress -Depth 5 -InputObject ([ordered]@{ t = $t.ToString('s'); kind = 'start'; window = 2.0; total = 98; attributed = $attributed; top = $top; defender = $defender }))).Append("`n")
+    if ($defender -eq 'realtime') {
+        $defenderTop = [ordered]@{
+            processes = @([ordered]@{ path = 'C:\x\codex.exe'; count = 83; ms = 937 })
+            folders = @([ordered]@{ path = 'C:\Users\test\.codex\sessions'; count = 60; ms = 900 })
+        }
+    }
+    $parent = 'services.exe'
+    if (($i % 7) -eq 0) { $parent = 'taskhostw.exe' }   # started by Task Scheduler
+    $top = @([ordered]@{ name = $name; pid = 1000 + $i; pct = 40 + ($i % 50); parent = $parent; parentCmd = ''; cmd = "$name --synthetic" })
+    [void]$sb.Append((ConvertTo-Json -Compress -Depth 6 -InputObject ([ordered]@{ t = $t.ToString('s'); kind = 'start'; window = 2.0; total = 98; attributed = $attributed; top = $top; defender = $defender; defenderTop = $defenderTop }))).Append("`n")
     if (($i % 23) -ne 0) {   # every 23rd episode never ends -> shown as cut off
         [void]$sb.Append((ConvertTo-Json -Compress -InputObject ([ordered]@{ t = $t.AddSeconds(12).ToString('s'); kind = 'end'; durationSec = 12 + ($i % 40); peak = 90 + ($i % 10) }))).Append("`n")
     }
