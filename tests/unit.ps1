@@ -107,5 +107,27 @@ if ($dev.Count) { $devPaths = @($dev[0].Paths | Where-Object { $_ }) }
 Check 'devcache lists only existing, user-level folders under the 24 h rule' ($dev.Count -eq 1 -and @($devPaths | Where-Object { -not (Test-Path -LiteralPath $_.Path) -or $_.Admin -or $_.MinAgeHours -ne 24 }).Count -eq 0)
 Check 'devcache is off by default' ((Get-DefaultSettings).categories.devcache -eq $false)
 
+# --- RAM trim selection ---
+. (Get-FunctionSource $app 'Select-TrimTargets', 'Invoke-RamTrim')
+$procs = @(
+    @{ Id = 10; Name = 'TFTClient'; WorkingSet = 900MB },   # foreground
+    @{ Id = 11; Name = 'java'; WorkingSet = 600MB },        # busy right now
+    @{ Id = 12; Name = 'notepad'; WorkingSet = 10MB },      # too small to matter
+    @{ Id = 13; Name = 'csrss'; WorkingSet = 80MB },        # critical
+    @{ Id = 14; Name = 'powershell'; WorkingSet = 90MB },   # ourselves
+    @{ Id = 15; Name = 'Teams'; WorkingSet = 400MB }        # idle and big: the one to trim
+)
+$before = @{ 10 = 1000.0; 11 = 1000.0; 12 = 0.0; 13 = 0.0; 14 = 0.0; 15 = 500.0 }
+$after  = @{ 10 = 1300.0; 11 = 1600.0; 12 = 0.0; 13 = 0.0; 14 = 5.0; 15 = 500.5 }
+$sel = @(Select-TrimTargets -Processes $procs -ForegroundPid 10 -CpuBefore $before -CpuAfter $after -IntervalMs 500 -CpuCount 12 -SelfPid 14)
+Check 'trim only idle, non-critical, non-foreground, sizeable processes' ($sel.Count -eq 1 -and $sel[0] -eq 15) ($sel -join ',')
+# Live processes, nothing trimmed: compile the app's Win32Helper and dry-run
+$appAst = [System.Management.Automation.Language.Parser]::ParseFile($app, [ref]$null, [ref]$null)
+$api = @($appAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$apiSource' }, $true))[0].Right.Expression.Value
+if (-not ([System.Management.Automation.PSTypeName]'Win32Helper').Type) { Add-Type -TypeDefinition $api }
+$dry = Invoke-RamTrim -DryRun
+$fgPid = [int][Win32Helper]::GetForegroundProcessId()
+Check 'dry run on live processes never targets the foreground app or itself' ($dry.Success -eq 0 -and @($dry.Targets) -notcontains $PID -and ($fgPid -eq 0 -or @($dry.Targets) -notcontains $fgPid) -and $dry.Skipped -gt 0) ("targets $(@($dry.Targets).Count), skipped $($dry.Skipped), fg $fgPid")
+
 Write-Host ('Unit: {0} passed, {1} failed' -f $passes, $failures)
 exit [int]($failures -gt 0)
