@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2 — 2026-10-04
+
+Feature release on top of 2.1.1 LTS; the long-term-support line stays on branch `lts/2.1`. Plan: `docs/superpowers/plans/2026-10-04-openrelax-2.2.md`.
+
+### Security
+- Everything in 2.1.1 LTS: only SYSTEM and Administrators can change the installed Fotokapan; the tab flags older user-writable installs as "Security update required".
+
+### Added
+- **Fotokapan diagnosis.** The tab's new summary page turns the last 7 days of spikes into findings per culprit category — Defender (on-demand scans vs. real-time scanning, with the folder it scanned most), drivers (interrupts/DPC), games, developer/AI tools, browser, Windows, scheduled tasks — each with its share and what to do; plus the culprit table and spikes per hour of day.
+- **Records page and report.** Every spike with duration, peak, culprit and Defender/scheduled-task notes; **Save report** writes the diagnosis as Markdown to `Documents\OpenRelax\`.
+- **Spike notifications.** A tray balloon when a new spike is recorded (at most one per 15 minutes; click opens the tab; switch in Settings).
+- **Recorder 2.2.** Records the parent's (masked) command line, so Task Scheduler starts are recognisable, and Defender's top scanning processes and most-scanned folders.
+- **Developer caches** category (npm, pip, NuGet, Yarn), opt-in, under the 24 h rule.
+- **Live cleaning progress**: files and bytes deleted so far on the button.
+- Tests: `tests/unit.ps1` (pure functions), `tests/trap-install.ps1` (install permissions), `tests/run-all.ps1` (release gate). CI now also runs the unit tests and a small engine stress test.
+
+### Changed
+- **Engine walker.** Scan, clean and disk analysis share one walker that never enters junctions, skips unreadable folders, and checks its time budget and progress beat by elapsed time instead of file count. Removing 30 000 files: 39.9 s → 5.2 s.
+- **Disk analysis** walks the profile once with per-folder totals and stops at 90 s (sizes then marked as lower bounds); root files get their own row.
+- **RAM trim** leaves the foreground app, processes busy during a 500 ms CPU sample and processes under 30 MB alone, and logs how many it skipped.
+
 ## 2.1.1 LTS — 2026-10-04
 
 ### Security

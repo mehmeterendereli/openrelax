@@ -1,4 +1,4 @@
-﻿# OpenRelax PC Care v2.1 LTS - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care v2.2 - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
 #                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder,
@@ -9,8 +9,10 @@ param(
     [switch]$SelfTest
 )
 
-$script:AppVersion   = '2.1.1'
-$script:AppEdition   = 'LTS'
+$script:AppVersion   = '2.2'
+$script:AppEdition   = ''   # 'LTS' on the long-term-support line (branch lts/2.1)
+$script:AppLabel     = "v$script:AppVersion"
+if ($script:AppEdition) { $script:AppLabel += " $script:AppEdition" }
 $script:ScriptPath   = $PSCommandPath
 $script:SettingsDir  = Join-Path $env:APPDATA 'OpenRelax'
 $script:SettingsFile = Join-Path $script:SettingsDir 'settings.json'
@@ -1309,7 +1311,7 @@ if ($AutoClean) {
 }
 
 if ($SelfTest) {
-    Write-Host "OpenRelax v$script:AppVersion $script:AppEdition self-test (read-only scan)"
+    Write-Host "OpenRelax $script:AppLabel self-test (read-only scan)"
     Write-Host "Admin: $script:IsAdmin | Settings: $script:SettingsFile"
     $grandSize = [long]0; $grandCount = [long]0; $grandLocked = [long]0
     foreach ($cat in (Get-JunkCategories)) {
@@ -1607,7 +1609,7 @@ $titleBar.Controls.Add($logoDot)
 Set-RoundedRegion $logoDot 8
 
 $titleLabel = New-Object System.Windows.Forms.Label
-$titleLabel.Text = "OpenRelax PC Care v$script:AppVersion $script:AppEdition"
+$titleLabel.Text = "OpenRelax PC Care $script:AppLabel"
 $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $titleLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $titleLabel.Location = New-Object System.Drawing.Point(30, 11)
@@ -3120,7 +3122,7 @@ if ($script:StressCycles -gt 0) {
                 Apply-Language
                 Add-StressSample $script:StressCycles
                 $report = [ordered]@{
-                    version = "$script:AppVersion $script:AppEdition"; cycles = $script:StressCycles; scans = $script:StressScans
+                    version = $script:AppLabel; cycles = $script:StressCycles; scans = $script:StressScans
                     seconds = [Math]::Round($script:StressClock.Elapsed.TotalSeconds, 1); busyAtEnd = [bool]$script:Sync.Busy
                     logErrors = [int]$script:LogErrors; lastError = [string]$script:LastErrorText; tickError = [bool]$script:TickErrorShown
                     diskRan = [bool]$script:StressDiskStarted; diskItems = $lvDisk.Items.Count
