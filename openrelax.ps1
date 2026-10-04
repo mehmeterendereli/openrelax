@@ -8,7 +8,7 @@ param(
     [switch]$SelfTest
 )
 
-$script:AppVersion   = '2.1'
+$script:AppVersion   = '2.1.1'
 $script:AppEdition   = 'LTS'
 $script:ScriptPath   = $PSCommandPath
 $script:SettingsDir  = Join-Path $env:APPDATA 'OpenRelax'

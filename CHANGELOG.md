@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.1 LTS — 2026-10-04
+
+### Security
+- **The installed Fotokapan script was writable by the installing user.** SYSTEM runs it at every boot, so any non-elevated process could have swapped it to gain SYSTEM rights. Only SYSTEM and Administrators can now change the trap; the user keeps read access to the logs. Reinstalling (Fotokapan tab → Install / Update) fixes existing installs, which the tab now flags as "Security update required".
+
 ## 2.1 LTS — 2026-10-04
 
 Long-term-support release: stabilization of 2.0 plus the Fotokapan CPU spike trap. Verified with the stress tests in `tests/`.
