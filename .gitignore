@@ -9,3 +9,6 @@ Desktop.ini
 *.log
 TestResults/
 coverage/
+
+# Isolated development worktrees
+.worktrees/
