@@ -123,6 +123,13 @@ Three stress tests in `tests/` exercise what CI does not. They are run locally b
 
 The GUI test uses environment hooks that are inert otherwise: `OPENRELAX_STRESS=<cycles>` with `OPENRELAX_STRESS_REPORT=<file.json>`, `OPENRELAX_SMOKETEST=1|<seconds>` and `OPENRELAX_TRAP_DIR=<folder>`.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the Windows PowerShell 5.1 setup,
+change-specific test commands, safety contracts and privacy guidance for bug
+reports. Pull requests should name the tests actually run and any Windows
+configuration that still needs validation.
+
 ## Safety contract
 
 OpenRelax deliberately avoids broad “delete everything” behaviour:
@@ -168,6 +175,7 @@ launch.bat                     No-install Windows launcher
 tests/verify.ps1               Parser + real read-only self-test entrypoint (CI)
 tests/*-stress.ps1             Engine, spike-trap and GUI stress tests (local)
 CHANGELOG.md                   Release notes
+CONTRIBUTING.md                Development, testing and reporting guide
 .github/workflows/verify.yml   Windows CI definition
 docs/social-preview.png        Repository social-preview upload asset
 README.md                      Behaviour, safety contract and usage
