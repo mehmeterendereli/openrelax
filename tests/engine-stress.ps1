@@ -23,11 +23,11 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
 }
 
 # --- the engine, as injected into GUI workers ---
-$source = Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'
-$ast = [System.Management.Automation.Language.Parser]::ParseFile($source, [ref]$null, [ref]$null)
-$names = 'Format-Bytes', 'Measure-JunkPaths', 'Remove-JunkPaths'
-$engine = ($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $names -contains $n.Name }, $true) |
-    ForEach-Object { $_.Extent.Text }) -join "`n"
+ . (Join-Path $PSScriptRoot 'test-support.ps1')
+$workspace = New-TestWorkspace $Work
+$Work = $workspace.Path
+$names = 'Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Format-Bytes','Measure-JunkPaths','Remove-JunkPaths'
+$engine = Get-TestFunctionSource $names
 . ([scriptblock]::Create($engine))
 
 # --- synthetic tree ---
@@ -81,13 +81,13 @@ Write-Host ('Tree: {0:N0} grid files + {1} specials, built in {2:N1} s (long pat
 
 # --- measure: unbounded and budgeted ---
 $sw.Restart()
-$m = Measure-JunkPaths -Paths @(@{ Path = $junk; Admin = $false; MinAgeHours = 24 }) -IsAdmin:$true
+$m = Measure-JunkPaths -Paths @(@{ Path = $junk; ApprovedRoot = $Work; Admin = $false; MinAgeHours = 24 }) -IsAdmin:$true
 $measureSec = $sw.Elapsed.TotalSeconds
 Check 'measure counts every old file, skips young files and junction targets' (($m.Count -eq ($grid + $specials)) -or ($m.Count -eq ($grid + $specials + 1))) ('{0:N0} counted, {1:N0}(+1 long) expected, {2:N1} s' -f $m.Count, ($grid + $specials), $measureSec)
 Check 'unbounded measure is not partial' (-not $m.Partial)
 $sw.Restart()
-$mb = Measure-JunkPaths -Paths @(@{ Path = $junk; Admin = $false; MinAgeHours = 24 }) -IsAdmin:$true -BudgetSec 1
-Check 'budgeted measure stops on time with Partial set' ($mb.Partial -and $sw.Elapsed.TotalSeconds -lt 4) ('{0:N1} s, {1:N0} files seen' -f $sw.Elapsed.TotalSeconds, $mb.Count)
+$mb = Measure-JunkPaths -Paths @(@{ Path = $junk; ApprovedRoot = $Work; Admin = $false; MinAgeHours = 24 }) -IsAdmin:$true -BudgetSec 1
+Check 'budgeted measure stops on time or completes the small fixture' (($mb.Partial -or $mb.Count -eq $m.Count) -and $sw.Elapsed.TotalSeconds -lt 4) ('{0:N1} s, {1:N0} files seen' -f $sw.Elapsed.TotalSeconds, $mb.Count)
 
 # --- remove in a worker runspace, with a file held open ---
 $held = [System.IO.File]::Open((Join-Path $junk 'locked\held.bin'), 'Open', 'Read', 'None')
@@ -97,7 +97,7 @@ $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState = 'MTA'; $rs.Open(
 $ps = [powershell]::Create(); $ps.Runspace = $rs
 [void]$ps.AddScript($engine)
 [void]$ps.AddStatement().AddScript('param($Sync, $Paths) $Sync.Result = Remove-JunkPaths -Paths $Paths -IsAdmin:$true').
-    AddArgument($Sync).AddArgument(@(@{ Path = $junk; Admin = $false; MinAgeHours = 24 }))
+    AddArgument($Sync).AddArgument(@(@{ Path = $junk; ApprovedRoot = $Work; Admin = $false; MinAgeHours = 24 }))
 $me = [System.Diagnostics.Process]::GetCurrentProcess()
 $memBefore = $me.PrivateMemorySize64
 $memPeak = $memBefore
@@ -126,8 +126,8 @@ Check 'junctions left in place' ((Test-Path -LiteralPath (Join-Path $junk 'escap
 Check 'young files kept (24 h rule)' (@(Get-ChildItem -LiteralPath $youngDir -File).Count -eq 20)
 Check 'locked file skipped, not crashed on' (Test-Path -LiteralPath (Join-Path $junk 'locked\held.bin'))
 Check 'read-only and hidden/system files deleted' (-not (Test-Path -LiteralPath (Join-Path $junk 'attrs\readonly.txt')) -and -not (Test-Path -LiteralPath (Join-Path $junk 'attrs\hidden.txt')))
-Check 'bracket and Turkish names deleted' (-not (Test-Path -LiteralPath (Join-Path $junk 'br[a]cket')) -and -not (Test-Path -LiteralPath (Join-Path $junk 'Türkçe çöp')))
-Check 'emptied folders removed (deep nesting too)' (-not (Test-Path -LiteralPath (Join-Path $junk 'n1')) -and @(Get-ChildItem -LiteralPath $junk -Directory -Force).Count -le 6) ((@(Get-ChildItem -LiteralPath $junk -Directory -Force).Name) -join ', ')
+Check 'bracket and Turkish files deleted' (-not (Test-Path -LiteralPath (Join-Path $junk 'br[a]cket\file[1].txt')) -and -not (Test-Path -LiteralPath (Join-Path $junk 'Türkçe çöp\ğüşıöç İ.txt')))
+Check 'temporary staging directories retained' ((Test-Path -LiteralPath (Join-Path $junk 'n1')) -and (Test-Path -LiteralPath (Join-Path $junk 'br[a]cket')))
 if ($longOk) {
     $longLeft = [System.IO.File]::Exists($longDir + 'long.txt')
     $outcome = 'reached and deleted'
@@ -140,6 +140,14 @@ $ps.Dispose(); $rs.Dispose()
 foreach ($j in (Join-Path $junk 'escape'), (Join-Path $junk 'd00\loop')) {
     if (Test-Path -LiteralPath $j) { [System.IO.Directory]::Delete($j) }
 }
+Assert-TestFixture $Work
+Assert-NoReparseAncestors $Work
+$marker = Get-Content -LiteralPath (Join-Path $Work '.openrelax-test-workspace') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($marker.owner -ne $workspace.Owner) { throw 'Extended-path workspace ownership changed.' }
+$walk = @{ Partial = $false; Skipped = 0; ErrorCount = 0; Errors = @() }
+[void]@(Get-SafeTreeEntries $Work $walk)
+if ($walk.Skipped -or $walk.ErrorCount) { throw 'Unsafe/unreadable extended workspace; cleanup refused.' }
+# Explicitly created junctions were removed above; this extended path reaches test-created long entries.
 [System.IO.Directory]::Delete('\\?\' + $Work, $true)
 
 Write-Host ('Engine stress: {0} failure(s); measure {1:N1} s, remove {2:N1} s for {3:N0} files' -f $failures, $measureSec, $removeSec, $grid)

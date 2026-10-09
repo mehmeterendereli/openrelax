@@ -23,9 +23,11 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
 }
 
 $app = Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'
-New-Item -ItemType Directory -Path $Work -Force | Out-Null
+. (Join-Path $PSScriptRoot 'test-support.ps1')
+$workspace = New-TestWorkspace $Work
+$Work = $workspace.Path
 $report = Join-Path $Work 'gui-report.json'
-$appArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $app))
+$appArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $app), '-TestMode', '-FixtureRoot', ('"{0}"' -f $Work), '-StateDir', ('"{0}"' -f (Join-Path $Work 'state')))
 
 # --- synthetic Fotokapan data: 300 episodes over 6 days (drivers, Defender
 # scan/real-time, cut-off episodes) so the view re-renders full lists every cycle ---
@@ -52,17 +54,10 @@ for ($i = 0; $i -lt 300; $i++) {
 [System.IO.File]::WriteAllText((Join-Path $trapDir 'durum.json'), (ConvertTo-Json -Compress -InputObject ([ordered]@{ t = (Get-Date).ToString('s'); cpu = 12; spikes = 3; inSpike = $false; threshold = 85; version = '2.1'; pid = 1; started = $t0.ToString('s') })))
 
 # --- 1. stress run ---
-$env:OPENRELAX_STRESS = [string]$Cycles
-$env:OPENRELAX_STRESS_REPORT = $report
-$env:OPENRELAX_TRAP_DIR = $trapDir
-try {
-    $p = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList $appArgs `
-        -RedirectStandardError (Join-Path $Work 'stderr.txt') -RedirectStandardOutput (Join-Path $Work 'stdout.txt')
-} finally {
-    Remove-Item Env:\OPENRELAX_STRESS, Env:\OPENRELAX_STRESS_REPORT, Env:\OPENRELAX_TRAP_DIR -ErrorAction SilentlyContinue
-}
-$exited = $p.WaitForExit(15 * 60 * 1000)
-if (-not $exited) { try { $p.Kill() } catch {} }
+$r0 = Start-FixtureApp $Work '' -TimeoutSeconds 120 -Hooks @{ OPENRELAX_STRESS = [string]$Cycles; OPENRELAX_STRESS_REPORT = $report }
+$exited = ($r0.ExitCode -eq 0)
+[IO.File]::WriteAllText((Join-Path $Work 'stderr.txt'),$r0.Stderr)
+[IO.File]::WriteAllText((Join-Path $Work 'stdout.txt'),$r0.Stdout)
 Check 'app finished the stress run and closed itself' $exited
 Check 'report written' (Test-Path -LiteralPath $report)
 function Read-Text([string]$Path) {
@@ -79,9 +74,12 @@ if (Test-Path -LiteralPath $report) {
     if ($Cycles -ge 30) {   # shorter runs end before the startup scan frees the worker
         Check 'junk scans ran in the worker alongside the UI' ($r.scans -ge 2) ('{0} scans' -f $r.scans)
     }
+    Check 'last background scan completed successfully' ($r.lastScanStatus -eq 'Success')
     Check 'no worker left running at exit' (-not $r.busyAtEnd)
+    Check 'all requested cycles completed' ($r.cycles -eq $Cycles)
     $samples = @($r.samples)
     $warm = @($samples | Where-Object { $_.cycle -ge 10 })
+    if ($Cycles -ge 12) { Check 'resource samples are present' ($warm.Count -ge 2) }
     if ($warm.Count -ge 2) {
         $a = $warm[0]; $z = $warm[$warm.Count - 1]
         Check 'GDI objects do not leak' (($z.gdi - $a.gdi) -le 25) ('{0} -> {1}' -f $a.gdi, $z.gdi)
@@ -94,19 +92,10 @@ if (Test-Path -LiteralPath $report) {
 }
 
 # --- 2. launch storm ---
-$env:OPENRELAX_SMOKETEST = '1'
-try {
-    for ($i = 1; $i -le $Launches; $i++) {
-        $err = Join-Path $Work "launch-$i-stderr.txt"
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $q = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList $appArgs -RedirectStandardError $err -RedirectStandardOutput (Join-Path $Work "launch-$i-stdout.txt")
-        $ok = $q.WaitForExit(60000)
-        if (-not $ok) { try { $q.Kill() } catch {} }
-        $e = Read-Text $err
-        Check ('launch {0}: starts, auto-closes, clean stderr' -f $i) ($ok -and $e.Length -eq 0) ('{0:N1} s {1}' -f $sw.Elapsed.TotalSeconds, $e)
-    }
-} finally {
-    Remove-Item Env:\OPENRELAX_SMOKETEST -ErrorAction SilentlyContinue
+for ($i = 1; $i -le $Launches; $i++) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $launch = Start-FixtureApp $Work '' -Hooks @{ OPENRELAX_SMOKETEST = '1' }
+    Check ('launch {0}: starts, auto-closes, clean stderr' -f $i) ($launch.ExitCode -eq 0 -and -not $launch.Stderr) ('{0:N1} s {1}' -f $sw.Elapsed.TotalSeconds,$launch.Stderr)
 }
 
 Write-Host ('GUI stress: {0} failure(s); artifacts in {1}' -f $failures, $Work)
