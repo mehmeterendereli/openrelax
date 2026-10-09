@@ -1,4 +1,17 @@
-# Changelog
+﻿# Changelog
+
+## Unreleased
+
+- Split typed settings, atomic persistence, path guards and maintenance orchestration into `lib/OpenRelax.Core.ps1`.
+- Fail closed on invalid AutoClean settings; default destructive/system categories off; require interactive confirmation and opt-in RAM/DNS.
+- Restrict custom TEMP, reparse traversal and SYSTEM task ownership/ACLs; deploy protected source atomically and reject hardlinked task/log files.
+- Omit command arguments and make extra Defender traces opt-in; label unassigned CPU honestly.
+- Report partial/failure outcomes, signed temporary memory change and cancellation completion; preserve preferences/statistics and prevent multiple GUI snapshots.
+- Wait for active work before GUI exit; preserve deletion counts after service restoration fails and avoid forced stops of dependent services.
+- Improve keyboard order, accessible control names, constrained-screen scrolling, contrast, status layout, TR/EN localization, table headers and empty states.
+- Refuse conflicting read-only/cleanup modes; preserve the requesting GUI user as the Fotokapan reader across different-account elevation.
+- Add owned fixture isolation, strict safety contracts, real SelfTest/AutoClean checks and visual smoke; migrate stress tests.
+- Add security/conduct policies, issue/PR forms, review ownership and a source release checklist. Remove an undefined current LTS claim.
 
 ## 2.1 LTS — 2026-10-04
 

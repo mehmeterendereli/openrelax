@@ -25,7 +25,23 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Verify parser, service-state guard and read-only self-test
+      - name: Verify all parsers, safety contracts and isolated end-to-end modes
         shell: powershell
         run: .\tests\verify.ps1
+
+      - name: Verify bounded traversal over owned synthetic files
+        shell: powershell
+        run: .\tests\engine-stress.ps1 -Dirs 8 -FilesPerDir 3
+
+      - name: Verify native control semantics and constrained viewport
+        shell: powershell
+        run: .\tests\ui-smoke.ps1
+
+      - name: Verify active-worker exit and all TR/EN renderers
+        shell: powershell
+        run: |
+          .\tests\exit-smoke.ps1
+          .\tests\visual-smoke.ps1

@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible behaviour problem using synthetic data.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, follow SECURITY.md. Remove personal paths, process details and credentials from logs. Do not reproduce deletion against personal files."
+  - type: input
+    id: version
+    attributes:
+      label: OpenRelax version or commit
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows edition/build and display scaling
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - GUI
+        - SelfTest
+        - AutoClean
+        - Fotokapan
+        - Verification or synthetic tests
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction, expected and actual result
+      description: Include whether the app was elevated and any selected categories.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence and checks run
+      description: Include exact commands/results; review screenshots and excerpts before attaching.
