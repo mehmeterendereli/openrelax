@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a current-user desktop shortcut installer and a multi-resolution icon matching the application branding.
 - Split typed settings, atomic persistence, path guards and maintenance orchestration into `lib/OpenRelax.Core.ps1`.
 - Fail closed on invalid AutoClean settings; default destructive/system categories off; require interactive confirmation and opt-in RAM/DNS.
 - Restrict custom TEMP, reparse traversal and SYSTEM task ownership/ACLs; deploy protected source atomically and reject hardlinked task/log files.

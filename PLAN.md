@@ -35,7 +35,8 @@ daha fazla modül çıkarımı değerlendirilebilir. Bu yerel güvenlik çalış
 
 ## Yerel kabul kanıtları — 9 Ekim 2026
 
-- Windows PowerShell 5.1: 12 PS kaynak/test dosyası ve 4 worker metni parser temiz.
+- Windows PowerShell 5.1: önceki 12 PS kaynak/test dosyası ve 4 worker metni parser temiz;
+  masaüstü kısayolu eklenince kaynak/test dosyası sayısı 13 oldu.
 - `tests/verify.ps1`: 17/17 StrictMode güvenlik kontratı; farklı-account ReaderSid
   korunur; gerçek SelfTest state/target
   değiştirmez; bozuk AutoClean durur; doğru eski fixture dosyası/count/bytes/stats;
@@ -73,10 +74,12 @@ döndürmedi; dış klavye otomasyonu uygulanmadı. Görsel kabul gerçek WinFor
 yakalamaları, erişilebilir kontrol kabulü native API ile yapılır. Test edilmemiş Windows yapılandırmaları ve yarış
 koşulları kesin güvenlik garantisi olarak sunulmaz.
 
-Native önkoşul kontrolü: mevcut hesapta admin token/grup yok; Sandbox ve Hyper-V
-kurulu değil, RDP kapalı. Kullanıcı bu aşamada mevcut yetkiyle ilerlemeyi seçti.
-SYSTEM/etkin cross-account ACL ve gerçek WU hizmeti kontrolleri, ayrı RDP oturumu,
-Narrator konuşması ve fiziksel DPI geçişi bu nedenle hâlâ doğrulanmadı.
+Native önkoşul kontrolü: mevcut oturumda admin token/grup yok, RDP kapalı.
+Kullanıcının onayladığı yönetici adımıyla Windows Sandbox etkinleştirildi;
+kurulum yeniden başlatma gerektiğini bildirdi. İzole SYSTEM/etkin cross-account
+ACL ve gerçek WU hizmeti kontrolleri yeniden başlatma sonrası bekliyor.
+Ayrı RDP oturumu, Narrator konuşması ve fiziksel DPI geçişi hâlâ doğrulanmadı;
+kullanıcıya uzun bir elle kabul listesi yüklenmeden bu sınırlar açık tutulur.
 
 Yayın öncesi sırayla: (1) disposable Windows'ta SYSTEM install/upgrade/uninstall ve
 effective ACL; (2) gerçek Windows Update restorasyonu; (3) klavye/high DPI/screen reader

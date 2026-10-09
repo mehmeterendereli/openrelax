@@ -16,6 +16,12 @@ PowerShell 7 and other operating systems are not validated targets.
 launch.bat
 ```
 
+To create a desktop shortcut with the OpenRelax icon, run
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\install-shortcut.ps1`.
+The shortcut points to this checkout; keep the folder in place. Administrator
+rights are not needed and a different existing shortcut is preserved. Keep
+`install-shortcut.ps1` and `docs/openrelax.ico` with the source for this command.
+
 The GUI opens without elevation. Administrator rights are only needed for
 marked system targets and Fotokapan installation/removal. Review the selected
 operations and confirmation dialog before maintenance.
