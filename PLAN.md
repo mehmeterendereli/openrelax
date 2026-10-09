@@ -13,7 +13,7 @@ Gerçek SYSTEM kurulumu ve kişisel/sistem verilerinde temizlik bu yerel kabulü
 | 3 | Ayarlar ve yıkıcı işlem güvenliği | Tip doğrulama, atomik kayıt, global erişim kontrollü mutex; SelfTest/AutoClean çakışması reddedilir; bozuk ayarda AutoClean durur; sepet kapalı; bakım onayı; TEMP/reparse koruması | Tamamlandı |
 | 4 | Ortak bakım sonucu ve otomasyon | GUI/headless ortak işleyici; başarı/kısmi/hata ve exit kodu; hizmet geri başlatma hatasında tamamlanan silme sayısı korunur; çıkış aktif işin bitmesini bekler; tercih kaydı/rollback | Kod ve izole kabul tamamlandı |
 | 5 | RAM ve CPU teşhis doğruluğu | RAM/DNS ayrı opt-in; signed geçici net bellek değişimi; atanmayan CPU sürücü diye sunulmaz; teşhis kesin neden iddiası taşımaz | Tamamlandı |
-| 6 | Görsel ve erişilebilir kullanım | Görsel sırayla TabIndex, yerelleştirilmiş accessible adlar, native checkbox/focus; WorkingArea sığdırma ve küçük pencerede kaydırma; TR/EN incelemesi | Native kontrol API/540×450 viewport ve 8 render kabulü tamamlandı; fiziksel klavye, gerçek DPI geçişi ve Narrator konuşması sürüm kapısı |
+| 6 | Görsel ve erişilebilir kullanım | Görsel sırayla TabIndex, yerelleştirilmiş accessible adlar, native checkbox/focus; WorkingArea sığdırma ve küçük pencerede kaydırma; TR/EN incelemesi | Native Tab/Shift+Tab/hidden-view routing, gerçek DPI bağlamı, kontrol API/540×450 viewport ve 8 render kabulü tamamlandı; fiziksel klavye, gerçek DPI geçişi ve Narrator konuşması sürüm kapısı |
 | 7 | Açık kaynak işbirliği ve CI | SECURITY/conduct, issue/PR şablonları, CODEOWNERS, destek sınırı/yayın checklist; parser/kontrat, küçük motor, native UI/çıkış/render kontrolleri CI işinde | Kaynaklar ve yerel giriş noktaları tamamlandı; remote CI sonucu PR kontrollerinde; repo policy kararı ayrı |
 | 8 | Uçtan uca kabul | Gerçek izole SelfTest/AutoClean, scan/disk worker, küçük motor fixture, GUI/resource kontrolü, 8 gerçek render ve bağımsız review | Yerel kabul tamamlandı |
 
@@ -48,8 +48,12 @@ daha fazla modül çıkarımı değerlendirilebilir. Bu yerel güvenlik çalış
 - GUI: 30 tur/10 scan/2 launch; GDI 54→54, USER 132→130; sınırlar içinde handle/bellek.
   Son klavye/viewport düzeltmesinden sonra 18 tur/6 başarılı scan/1 launch,
   GDI 56→56, handle 930→920, bellek 145→118 MB geçti.
-- `tests/ui-smoke.ps1`: native settings focus sırası, TR/EN accessible adlar,
-  checkbox default action/tercih persistence ve 540×450 viewportta görünür erişim.
+- `tests/ui-smoke.ps1`: native settings focus sırası, Tab/Shift+Tab dialog routing
+  ve gizli sayfaları atlama; TR/EN accessible adlar, checkbox default action/tercih
+  persistence, 540×450 viewportta görünür erişim ve ölçülen window/thread DPI
+  bağlamı/setter sonucu. Gerçek monitör DPI geçişi ve Narrator konuşması ayrıdır.
+  Son yerel 6/6 kabul: Session 1, `UnawareGdiScaled`, window DPI 96;
+  süreç bağlamını ayarlama başarılı, Win32 hata yok.
 - Fotokapan gerçek kontrollü CPU yükü: 2 burst × 6 saniye/9 worker, 2 start/end,
   18 kontrolün tümü geçti; argümanlar yok; recorder maliyeti tek çekirdeğin %1,2'si,
   handle 795→870 ve bellek 89→103 MB. Çocuklar owned TEMP/module-cache ve
@@ -68,6 +72,11 @@ Computer Use bu tur başladı, fakat envanter OpenRelax test penceresini hedef o
 döndürmedi; dış klavye otomasyonu uygulanmadı. Görsel kabul gerçek WinForms test
 yakalamaları, erişilebilir kontrol kabulü native API ile yapılır. Test edilmemiş Windows yapılandırmaları ve yarış
 koşulları kesin güvenlik garantisi olarak sunulmaz.
+
+Native önkoşul kontrolü: mevcut hesapta admin token/grup yok; Sandbox ve Hyper-V
+kurulu değil, RDP kapalı. Kullanıcı bu aşamada mevcut yetkiyle ilerlemeyi seçti.
+SYSTEM/etkin cross-account ACL ve gerçek WU hizmeti kontrolleri, ayrı RDP oturumu,
+Narrator konuşması ve fiziksel DPI geçişi bu nedenle hâlâ doğrulanmadı.
 
 Yayın öncesi sırayla: (1) disposable Windows'ta SYSTEM install/upgrade/uninstall ve
 effective ACL; (2) gerçek Windows Update restorasyonu; (3) klavye/high DPI/screen reader

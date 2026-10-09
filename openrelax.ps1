@@ -1021,18 +1021,46 @@ if (-not $script:OwnGuiMutex) {
     exit 2
 }
 
-# Crisper text on high-DPI displays without changing the pixel layout
-# (DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED = -5, Windows 10 1809+)
+# Request GDI scaling without changing the fixed pixel layout. A host may have
+# already selected its DPI context; retain the actual result for diagnostics.
+$script:DpiInitialization = @{ Requested = 'UnawareGdiScaled'; Attempted = $false; Success = $false; Win32Error = $null; Error = $null }
 if (-not ([System.Management.Automation.PSTypeName]'OpenRelax.DpiHelper').Type) {
     try {
-        Add-Type -Namespace OpenRelax -Name DpiHelper -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);' -ErrorAction Stop
-    } catch {}
+        Add-Type -Namespace OpenRelax -Name DpiHelper -MemberDefinition @'
+[DllImport("user32.dll", SetLastError=true)]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+[DllImport("user32.dll")]
+public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+[DllImport("user32.dll")]
+public static extern IntPtr GetThreadDpiAwarenessContext();
+[DllImport("user32.dll")]
+public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr value);
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
+[DllImport("user32.dll")]
+public static extern uint GetDpiForWindow(IntPtr hwnd);
+'@ -ErrorAction Stop
+    } catch { $script:DpiInitialization.Error = $_.Exception.Message }
 }
 try {
     if (([System.Management.Automation.PSTypeName]'OpenRelax.DpiHelper').Type) {
-        [void][OpenRelax.DpiHelper]::SetProcessDpiAwarenessContext((New-Object IntPtr(-5)))
+        $script:DpiInitialization.Attempted = $true
+        $script:DpiInitialization.Success = [OpenRelax.DpiHelper]::SetProcessDpiAwarenessContext([IntPtr]::new(-5))
+        if (-not $script:DpiInitialization.Success) { $script:DpiInitialization.Win32Error = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
     }
-} catch {}
+} catch { $script:DpiInitialization.Error = $_.Exception.Message }
+
+function Get-WindowDpiDiagnostics([IntPtr]$Handle) {
+    $windowContext = [OpenRelax.DpiHelper]::GetWindowDpiAwarenessContext($Handle)
+    $threadContext = [OpenRelax.DpiHelper]::GetThreadDpiAwarenessContext()
+    $windowAwareness = [OpenRelax.DpiHelper]::GetAwarenessFromDpiAwarenessContext($windowContext)
+    $mode = switch ($windowAwareness) { 0 { 'Unaware' }; 1 { 'SystemAware' }; 2 { 'PerMonitor' }; default { 'Invalid' } }
+    if ([OpenRelax.DpiHelper]::AreDpiAwarenessContextsEqual($windowContext,[IntPtr]::new(-5))) { $mode = 'UnawareGdiScaled' }
+    elseif ([OpenRelax.DpiHelper]::AreDpiAwarenessContextsEqual($windowContext,[IntPtr]::new(-4))) { $mode = 'PerMonitorV2' }
+    return @{ Initialization = $script:DpiInitialization; WindowMode = $mode; WindowAwareness = $windowAwareness; ThreadAwareness = [OpenRelax.DpiHelper]::GetAwarenessFromDpiAwarenessContext($threadContext); WindowDpi = [int][OpenRelax.DpiHelper]::GetDpiForWindow($Handle); SessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId }
+}
 
 # Native Windows API helpers - a compile failure here is fatal, so surface it
 if (-not ([System.Management.Automation.PSTypeName]'Win32Helper').Type) {
@@ -3102,7 +3130,7 @@ if ($UiAcceptanceReportDir) {
     $script:UiProbeTimer.add_Tick({
         if ($script:Sync.Busy -or $script:Tasks.Count) { return }
         $script:UiProbeTimer.Stop()
-        $errors = @(); $checks = @()
+        $errors = @(); $checks = @(); $dpi = $null
         $originalSize = $form.Size; $originalLanguage = $script:Settings.language
         try {
             Show-View 'settings'
@@ -3117,6 +3145,29 @@ if ($UiAcceptanceReportDir) {
             }
             if ($genCard.SelectNextControl($current,$true,$true,$false,$false)) { throw 'Unexpected additional settings tab stop.' }
             $checks += 'settings-focus-order'
+            # Exercise WinForms' actual dialog-key preprocessor, rather than
+            # calling SelectNextControl again or injecting global desktop input.
+            $dialogKey = [Windows.Forms.Form].GetMethod('ProcessDialogKey',[Reflection.BindingFlags]'Instance,NonPublic')
+            if (-not $dialogKey) { throw 'Dialog key processor unavailable.' }
+            if (-not $expected[0].Focus()) { throw 'Initial dialog-key focus failed.' }
+            for ($i=1; $i -lt $expected.Count; $i++) {
+                $handled = $dialogKey.Invoke($form,[object[]]@([Windows.Forms.Keys]::Tab))
+                if (-not $handled -or -not $expected[$i].Focused) { throw ('Tab routing failed at: ' + $expected[$i].Text) }
+            }
+            for ($i=$expected.Count-2; $i -ge 0; $i--) {
+                $reverse = [Windows.Forms.Keys]([int][Windows.Forms.Keys]::Shift -bor [int][Windows.Forms.Keys]::Tab)
+                $handled = $dialogKey.Invoke($form,[object[]]@($reverse))
+                if (-not $handled -or -not $expected[$i].Focused) { throw ('Shift+Tab routing failed at: ' + $expected[$i].Text) }
+            }
+            $checks += 'dialog-key-routing'
+            [void]$expected[$expected.Count-1].Focus()
+            $handled = $dialogKey.Invoke($form,[object[]]@([Windows.Forms.Keys]::Tab))
+            if (-not $handled -or -not $btnMin.Focused -or $switchPanel.Focused -or $btnAnalyze.Focused) { throw 'Tab visited a hidden view or failed to wrap.' }
+            $checks += 'hidden-view-tab-skip'
+            $dpi = Get-WindowDpiDiagnostics $form.Handle
+            if ($dpi.WindowAwareness -notin @(0,1,2) -or $dpi.ThreadAwareness -notin @(0,1,2) -or $dpi.WindowDpi -le 0) { throw 'Effective DPI context could not be measured.' }
+            if ($dpi.Initialization.Success -and $dpi.WindowMode -ne 'UnawareGdiScaled') { throw 'Window context differs from the successfully requested DPI mode.' }
+            $checks += 'runtime-dpi-context'
             foreach ($language in 'tr','en') {
                 $script:Settings.language = $language; Apply-Language
                 foreach ($control in @($btnClose,$btnMin,$cmbLimit,$cmbLang,$logBox,$lvDisk,$lvTrapTop,$lvTrapRecent)) {
@@ -3136,6 +3187,7 @@ if ($UiAcceptanceReportDir) {
             }
             $checks += 'accessible-names-and-checkbox-action'
             Show-View 'dash'
+            if (-not $switchPanel.Focus()) { throw 'Dashboard option cannot receive keyboard focus.' }
             $form.AutoScrollPosition = [Drawing.Point]::Empty
             $form.Size = [Drawing.Size]::new(540,450)
             $form.PerformLayout()
@@ -3154,7 +3206,7 @@ if ($UiAcceptanceReportDir) {
         finally {
             $script:Settings.language = $originalLanguage; Apply-Language
             $form.Size = $originalSize; $form.AutoScrollPosition = [Drawing.Point]::Empty
-            @{ passed = ($errors.Count -eq 0 -and $checks.Count -eq 3); checks = @($checks); errors = @($errors); boundary = 'Native control API; no physical keyboard, Narrator speech or monitor DPI transition.' } |
+            @{ passed = ($errors.Count -eq 0 -and $checks.Count -eq 6); checks = @($checks); errors = @($errors); dpi = $dpi; boundary = 'Native control API; no physical keyboard, Narrator speech or monitor DPI transition.' } |
                 ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $UiAcceptanceReportDir 'ui-report.json') -Encoding UTF8
             $script:ReallyExit = $true; $form.Close()
         }

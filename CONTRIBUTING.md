@@ -21,8 +21,11 @@ images. `tests\gui-stress.ps1 -Cycles 30 -Launches 2` checks real handlers,
 background scans and bounded resource growth. These are local desktop checks.
 Run `tests\exit-smoke.ps1` for lifecycle changes; the real GUI must defer exit
 until its owned worker finishes.
-Run `tests\ui-smoke.ps1` for tab order, accessible native control semantics,
-preference persistence and reachability in a constrained 540×450 viewport.
+Run `tests\ui-smoke.ps1` for native Tab/Shift+Tab dialog routing, hidden-view
+skipping, accessible control semantics, preference persistence and reachability
+in a constrained 540×450 viewport. The report measures the effective window/
+thread DPI context, window DPI and process-context setter result. A host that
+already selected its context may reject the setter; its measured mode is retained.
 This verifies control APIs; physical keyboard, Narrator speech and monitor DPI
 transitions require separate interactive acceptance. The workflow also runs
 these bounded fixture checks; it never installs SYSTEM tasks or alters services.

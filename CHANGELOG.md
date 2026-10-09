@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 ## Unreleased
 
@@ -9,6 +9,7 @@
 - Report partial/failure outcomes, signed temporary memory change and cancellation completion; preserve preferences/statistics and prevent multiple GUI snapshots.
 - Wait for active work before GUI exit; preserve deletion counts after service restoration fails and avoid forced stops of dependent services.
 - Improve keyboard order, accessible control names, constrained-screen scrolling, contrast, status layout, TR/EN localization, table headers and empty states.
+- Verify native Tab/Shift+Tab routing and hidden-view skipping; record the actual window/thread DPI context and context-setter result.
 - Refuse conflicting read-only/cleanup modes; preserve the requesting GUI user as the Fotokapan reader across different-account elevation.
 - Add owned fixture isolation, strict safety contracts, real SelfTest/AutoClean checks and visual smoke; migrate stress tests.
 - Add security/conduct policies, issue/PR forms, review ownership and a source release checklist. Remove an undefined current LTS claim.
