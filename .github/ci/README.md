@@ -11,7 +11,8 @@ Windows PowerShell 5.1 runtime checks.
 - Failed diff/history retrieval selects both suites; code-to-documentation renames
   retain the old code path and cannot evade testing.
 - Draft PRs run preflight only; `ready_for_review` starts applicable Windows tests.
-- Requested ordinary checks must succeed before the elevated job can start.
+- The short elevated suite runs before the long GUI/cleanup suite when requested.
+  Its failure blocks ordinary Windows acceptance instead of wasting a full run.
   A deliberately unrequested suite may be skipped, never represented as tested.
 - Fork PRs do not receive the elevated integration job. No secrets or write token
   are added. The two existing Windows job names and all test assertions remain.

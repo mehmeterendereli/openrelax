@@ -43,10 +43,14 @@ jobs:
 
   parser-and-self-test:
     name: Parser + safety contracts
-    needs: preflight
+    needs: [preflight, elevated-fotokapan]
     if: >-
-      needs.preflight.outputs.standard == 'true' &&
-      (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+      ${{ !cancelled() &&
+          needs.preflight.result == 'success' &&
+          needs.preflight.outputs.standard == 'true' &&
+          (needs.elevated-fotokapan.result == 'success' ||
+           needs.elevated-fotokapan.result == 'skipped') &&
+          (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: windows-latest
     timeout-minutes: 8
     env:
@@ -164,13 +168,11 @@ jobs:
 
   elevated-fotokapan:
     name: SYSTEM install, ACL, upgrade and uninstall
-    needs: [preflight, parser-and-self-test]
+    needs: preflight
     if: >-
       ${{ !cancelled() &&
           needs.preflight.result == 'success' &&
           needs.preflight.outputs.elevated == 'true' &&
-          (needs.parser-and-self-test.result == 'success' ||
-           needs.parser-and-self-test.result == 'skipped') &&
           (github.event_name != 'pull_request' ||
            (!github.event.pull_request.draft &&
             github.event.pull_request.head.repo.full_name == github.repository)) }}
