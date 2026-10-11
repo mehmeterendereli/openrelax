@@ -1,224 +1,132 @@
-[CmdletBinding()]
-param()
-
-Set-StrictMode -Version Latest
+﻿[CmdletBinding()]
+param([string]$Work = (Join-Path $env:TEMP ('openrelax-verify-' + [guid]::NewGuid().ToString('N'))),[switch]$KeepArtifacts)
+Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
-
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$appPath = Join-Path $repoRoot 'openrelax.ps1'
-
-if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
-    throw "OpenRelax entrypoint was not found: $appPath"
-}
-
-function Get-FileFingerprint {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return [pscustomobject]@{
-            Exists = $false
-            Hash   = $null
-            Length = [long]0
-        }
+. (Join-Path $PSScriptRoot 'test-support.ps1')
+$repo = Split-Path -Parent $PSScriptRoot
+$workspace = New-TestWorkspace $Work
+$Work = $workspace.Path
+function Assert([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
+try {
+    $sources = @(Get-ChildItem -LiteralPath $repo -Filter '*.ps1' -Recurse -File)
+    foreach ($source in $sources) {
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($source.FullName,[ref]$tokens,[ref]$errors)
+        Assert ($errors.Count -eq 0) ("Parser errors in " + $source.Name + ': ' + ($errors -join '; '))
+        if ($source.Name -eq 'openrelax.ps1') { $appAst = $ast }
     }
-
-    $file = Get-Item -LiteralPath $Path -ErrorAction Stop
-    return [pscustomobject]@{
-        Exists = $true
-        Hash   = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
-        Length = [long]$file.Length
+    $workers = @{}
+    foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode') {
+        $assignment = $appAst.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq ('$script:' + $name)},$true)
+        $literal = $assignment.Right.Find({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst]},$true)
+        Assert ($null -ne $literal) "Worker source missing: $name"
+        $tokens = $null; $errors = $null
+        [void][Management.Automation.Language.Parser]::ParseInput($literal.Value,[ref]$tokens,[ref]$errors)
+        Assert ($errors.Count -eq 0) "Worker parser errors: $name"
+        $workers[$name] = $literal.Value
     }
-}
-
-function Assert-FileFingerprintUnchanged {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Before,
-
-        [Parameter(Mandatory = $true)]
-        $After,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Label
-    )
-
-    if ($Before.Exists -ne $After.Exists) {
-        throw "$Label existence changed during -SelfTest."
-    }
-
-    if ($Before.Exists -and (($Before.Hash -ne $After.Hash) -or ($Before.Length -ne $After.Length))) {
-        throw "$Label content changed during -SelfTest."
-    }
-}
-
-Write-Host '== PowerShell parser check =='
-$tokens = $null
-$parseErrors = $null
-$syntaxTree = [System.Management.Automation.Language.Parser]::ParseFile(
-    $appPath,
-    [ref]$tokens,
-    [ref]$parseErrors
-)
-
-if ($parseErrors.Count -gt 0) {
-    foreach ($parseError in $parseErrors) {
-        Write-Error ("{0}:{1}:{2} {3}" -f $appPath, $parseError.Extent.StartLineNumber, $parseError.Extent.StartColumnNumber, $parseError.Message)
-    }
-    throw "PowerShell parser reported $($parseErrors.Count) error(s)."
-}
-
-Write-Host "Parser OK: $($tokens.Count) tokens"
-
-Write-Host '== Windows Update service-state contract =='
-$updateCleanupAst = $syntaxTree.Find(
-    {
-        param($node)
-        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq 'Invoke-WindowsUpdateCacheCleanup'
-    },
-    $true
-)
-
-if (-not $updateCleanupAst) {
-    throw 'Invoke-WindowsUpdateCacheCleanup was not found.'
-}
-
-$contractSource = $updateCleanupAst.Extent.Text + @'
-
-function Invoke-ContractScenario {
-    param([switch]$FailBitsStop)
-
-    $script:serviceStates = @{ wuauserv = 'Running'; bits = 'Stopped' }
-    if ($FailBitsStop) { $script:serviceStates.bits = 'Running' }
-    $script:stoppedServices = @()
-    $script:startedServices = @()
-    $script:removeCalls = 0
-    $result = $null
-
-    function Get-Service {
-        param([string]$Name, $ErrorAction)
-        return [pscustomobject]@{ Name = $Name; Status = $script:serviceStates[$Name] }
-    }
-    function Stop-Service {
-        param([string]$Name, [switch]$Force, $ErrorAction)
-        if ($FailBitsStop -and $Name -eq 'bits') { throw 'simulated BITS stop failure' }
-        $script:serviceStates[$Name] = 'Stopped'
-        $script:stoppedServices += $Name
-    }
-    function Start-Service {
-        param([string]$Name, $ErrorAction)
-        $script:serviceStates[$Name] = 'Running'
-        $script:startedServices += $Name
-    }
-    function Remove-JunkPaths {
-        param($Paths, [bool]$IsAdmin)
-        $script:removeCalls++
-        return @{ Bytes = 12; Count = 1 }
-    }
-
-    $threw = $false
+    Write-Host "Parser OK: $($sources.Count) source/test files and 4 workers."
+    # A bounded child runs pure contracts and small owned synthetic file fixtures.
+    $contractInfo = [Diagnostics.ProcessStartInfo]::new()
+    $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'safety-contracts.ps1') + '" -Work "' + (Join-Path $Work 'contracts') + '" -KeepArtifacts'
+    $contractInfo.UseShellExecute = $false; $contractInfo.CreateNoWindow = $true; $contractInfo.RedirectStandardOutput = $true; $contractInfo.RedirectStandardError = $true
+    foreach ($key in @($contractInfo.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $contractInfo.EnvironmentVariables.Remove($key) } }
+    $childTemp = Join-Path $Work 'contract-temp'; [void][IO.Directory]::CreateDirectory($childTemp)
+    $contractInfo.EnvironmentVariables['TEMP'] = $childTemp; $contractInfo.EnvironmentVariables['TMP'] = $childTemp
+    $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work 'contract-module-cache'
+    $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
+    [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
+    if (-not $child.WaitForExit(60000)) { $child.Kill(); $child.WaitForExit(); throw 'Owned contract child timed out.' }
+    $code = $child.ExitCode; $text = $out.Result; $errorText = $err.Result; $child.Dispose()
+    Write-Host $text.TrimEnd()
+    Assert ($code -eq 0 -and -not $errorText -and $text -match '0 failed') ('Safety contracts failed: ' + $errorText)
+    $fixture = New-TestWorkspace (Join-Path $Work 'app')
+    [void][IO.Directory]::CreateDirectory((Join-Path $fixture.Path 'state'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $fixture.Path 'temp'))
+    $settingsFile = Join-Path $fixture.Path 'state\settings.json'
+    $logFile = Join-Path $fixture.Path 'state\autoclean.log'
+    $settings = Get-DefaultSettings
+    foreach ($key in @($settings.categories.Keys)) { $settings.categories[$key] = ($key -eq 'temp') }
+    Write-SettingsAtomic $settings $settingsFile
+    [IO.File]::WriteAllText($logFile,'unchanged')
+    $old = Join-Path $fixture.Path 'temp\old.tmp'; [IO.File]::WriteAllBytes($old,(New-Object byte[] 4096)); [IO.File]::SetLastWriteTime($old,(Get-Date).AddDays(-3))
+    $fresh = Join-Path $fixture.Path 'temp\fresh.tmp'; [IO.File]::WriteAllText($fresh,'keep')
+    $settingsHash = (Get-FileHash -LiteralPath $settingsFile).Hash; $logHash = (Get-FileHash -LiteralPath $logFile).Hash
+    $self = Start-FixtureApp $fixture.Path '-SelfTest'
+    $version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'openrelax.ps1')), "\`$script:AppVersion\s*=\s*'([^']+)'").Groups[1].Value
+    Assert ($self.ExitCode -eq 0 -and -not $self.Stderr -and $self.Stdout -match ('OpenRelax v' + [regex]::Escape($version)) -and $self.Stdout -match 'Self-test OK') ('Real SelfTest failed: ' + $self.Stderr)
+    Assert ((Get-FileHash -LiteralPath $settingsFile).Hash -eq $settingsHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash) 'SelfTest changed persistent state.'
+    Assert ((Test-Path -LiteralPath $old) -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'SelfTest modified fixture data.'
+    Write-Host 'Real SelfTest OK: fixture files, settings and log unchanged.'
+    $conflicting = Start-FixtureApp $fixture.Path '-SelfTest -AutoClean'
+    Assert ($conflicting.ExitCode -ne 0 -and $conflicting.Stderr -match 'cannot be combined') 'Conflicting modes were accepted.'
+    Assert ((Get-FileHash -LiteralPath $settingsFile).Hash -eq $settingsHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash -and (Get-Item -LiteralPath $old).Length -eq 4096 -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'Conflicting modes changed state or target files.'
+    Write-Host 'Conflicting SelfTest/AutoClean refused before mutation.'
+    [IO.File]::WriteAllText($settingsFile,'{"language":')
+    $badHash = (Get-FileHash -LiteralPath $settingsFile).Hash
+    $bad = Start-FixtureApp $fixture.Path '-AutoClean'
+    Assert ($bad.ExitCode -eq 1 -and $bad.Stderr -match 'AutoClean stopped') 'Invalid settings did not stop AutoClean.'
+    Assert ((Test-Path -LiteralPath $old) -and (Get-FileHash -LiteralPath $settingsFile).Hash -eq $badHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash) 'Invalid settings caused a mutation.'
+    Write-SettingsAtomic $settings $settingsFile
+    $clean = Start-FixtureApp $fixture.Path '-AutoClean'
+    Assert ($clean.ExitCode -eq 0 -and -not $clean.Stderr -and $clean.Stdout -match 'status=Success; files=1; bytes=4096') ('AutoClean result incorrect: ' + $clean.Stdout + $clean.Stderr)
+    Assert (-not (Test-Path -LiteralPath $old) -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'AutoClean deleted the wrong fixture file.'
+    $after = Read-SettingsDocument $settingsFile
+    Assert ($after.Valid -and $after.Settings.stats.totalRuns -eq 1 -and $after.Settings.stats.totalCleanedBytes -eq 4096) 'AutoClean statistics were not persisted correctly.'
+    $after.Settings.categories.recycle = $true; Write-SettingsAtomic $after.Settings $settingsFile
+    $partial = Start-FixtureApp $fixture.Path '-AutoClean'
+    Assert ($partial.ExitCode -eq 2 -and $partial.Stdout -match 'status=Partial' -and $partial.Stdout -match 'skipped=1') 'Headless restricted work was reported as complete.'
+    Write-Host 'Real AutoClean OK: invalid settings fail closed, correct file/count/statistics, restricted work exits 2.'
+    $scanFixture = New-TestWorkspace (Join-Path $Work 'scan')
+    $scanTemp = Join-Path $scanFixture.Path 'temp'; [void][IO.Directory]::CreateDirectory($scanTemp)
+    $scanFile = Join-Path $scanTemp 'old.tmp'; [IO.File]::WriteAllBytes($scanFile,(New-Object byte[] 88)); [IO.File]::SetLastWriteTime($scanFile,(Get-Date).AddDays(-3))
+    $priorFixture = $env:OPENRELAX_FIXTURE_ROOT
+    $scanSync = [hashtable]::Synchronized(@{ Beat = [DateTime]::UtcNow; ScanResult = $null; Log = [Collections.Queue]::new() })
+    $scanWorker = [powershell]::Create()
     try {
-        $result = Invoke-WindowsUpdateCacheCleanup -Paths @(@{ Path = 'unused'; Admin = $true }) -IsAdmin:$true
-    } catch {
-        $threw = $true
-    }
-
-    return [pscustomobject]@{
-        Threw = $threw
-        Result = $result
-        States = $script:serviceStates.Clone()
-        Stopped = @($script:stoppedServices)
-        Started = @($script:startedServices)
-        RemoveCalls = $script:removeCalls
-    }
+        $env:OPENRELAX_FIXTURE_ROOT = $scanFixture.Path
+        $source = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Get-JunkCategories','Get-RecycleBinInfo','Measure-JunkPaths')
+        [void]$scanWorker.AddScript('Set-StrictMode -Version 2' + "`n" + $source)
+        [void]$scanWorker.AddStatement().AddScript($workers.ScanTaskCode).AddArgument($scanSync).AddArgument(@{ IsAdmin = $false })
+        $handle = $scanWorker.BeginInvoke()
+        if (-not $handle.AsyncWaitHandle.WaitOne(15000)) { [void]$scanWorker.BeginStop($null,$null); throw 'Scan worker timed out.' }
+        [void]$scanWorker.EndInvoke($handle)
+        Assert (-not $scanWorker.HadErrors -and $scanSync.ScanResult.Status -eq 'Success' -and $scanSync.ScanResult.TotalSize -eq 88 -and $scanSync.ScanResult.FileCount -eq 1 -and $scanSync.ScanResult.Errors.Count -eq 0) 'Real scan worker failed or returned incorrect totals.'
+        Assert ((Get-Item -LiteralPath $scanFile).Length -eq 88) 'Scan worker changed the target file.'
+    } finally { $scanWorker.Dispose(); $env:OPENRELAX_FIXTURE_ROOT = $priorFixture }
+    Write-Host 'Real scan worker OK: successful status and physical byte/count totals.'
+    # Run the real analysis worker, including a link to an outside sentinel.
+    $disk = New-TestWorkspace (Join-Path $Work 'disk')
+    $good = Join-Path $disk.Path 'good'; [void][IO.Directory]::CreateDirectory($good)
+    [IO.File]::WriteAllBytes((Join-Path $good 'data.bin'),(New-Object byte[] 123))
+    $outside = Join-Path $Work 'disk-outside'; [void][IO.Directory]::CreateDirectory($outside)
+    $sentinel = Join-Path $outside 'keep.bin'; [IO.File]::WriteAllBytes($sentinel,(New-Object byte[] 9000))
+    $link = Join-Path $disk.Path 'escape'; New-Item -ItemType Junction -Path $link -Target $outside | Out-Null
+    $sync = [hashtable]::Synchronized(@{ Beat = [DateTime]::UtcNow; DiskResult = $null; DiskProgress = $null })
+    $ps = [powershell]::Create()
+    try {
+        $engine = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Get-SafeTreeEntries')
+        [void]$ps.AddScript('Set-StrictMode -Version 2' + "`n" + $engine)
+        [void]$ps.AddStatement().AddScript($workers.DiskTaskCode).AddArgument($sync).AddArgument(@{ Target = $disk.Path })
+        $handle = $ps.BeginInvoke()
+        if (-not $handle.AsyncWaitHandle.WaitOne(15000)) { [void]$ps.BeginStop($null,$null); throw 'Disk worker timed out.' }
+        [void]$ps.EndInvoke($handle)
+        Assert (-not $ps.HadErrors) ('Disk worker errors: ' + ($ps.Streams.Error -join '; '))
+        $result = $sync.DiskResult
+        Assert ($result.Status -eq 'Partial' -and $result.Count -eq 1 -and $result.Rows.Count -eq 1 -and $result.Rows[0].Name -eq 'good' -and $result.Rows[0].Size -eq 123 -and $result.Skipped -eq 1) 'Disk worker followed a junction or misreported its result.'
+        Assert ((Get-Item -LiteralPath $sentinel).Length -eq 9000) 'Disk analysis changed the outside sentinel.'
+    } finally { $ps.Dispose(); [IO.Directory]::Delete($link) }
+    # Explicit fixture state redirection must reject an ancestor junction.
+    $stateFixture = New-TestWorkspace (Join-Path $Work 'state-guard')
+    $stateLink = Join-Path $stateFixture.Path 'state'; New-Item -ItemType Junction -Path $stateLink -Target $outside | Out-Null
+    try {
+        $refused = Start-FixtureApp $stateFixture.Path '-SelfTest'
+        Assert ($refused.ExitCode -ne 0 -and $refused.Stdout -notmatch 'Self-test OK') 'Junction state override was accepted.'
+        Assert (-not (Test-Path -LiteralPath (Join-Path $outside 'settings.json'))) 'State override wrote outside its fixture.'
+    } finally { [IO.Directory]::Delete($stateLink) }
+    Write-Host 'Real disk worker and state-path guards OK: outside sentinel untouched.'
+    Write-Host 'Verification OK.'
+} finally {
+    if ($KeepArtifacts) { Write-Host "Artifacts: $Work" } else { Remove-TestWorkspace $workspace }
 }
-
-$normal = Invoke-ContractScenario
-if ($normal.Threw -or $normal.RemoveCalls -ne 1 -or $normal.Result.Count -ne 1) {
-    throw 'Windows Update cleanup did not execute in the successful contract scenario.'
-}
-if (($normal.Stopped -join ',') -ne 'wuauserv' -or ($normal.Started -join ',') -ne 'wuauserv') {
-    throw 'Windows Update cleanup did not preserve an initially stopped BITS service.'
-}
-if ($normal.States.wuauserv -ne 'Running' -or $normal.States.bits -ne 'Stopped') {
-    throw 'Windows Update cleanup did not restore the original service states.'
-}
-
-$failure = Invoke-ContractScenario -FailBitsStop
-if (-not $failure.Threw -or $failure.RemoveCalls -ne 0) {
-    throw 'Windows Update cleanup continued after a service-stop failure.'
-}
-if ($failure.States.wuauserv -ne 'Running' -or $failure.States.bits -ne 'Running') {
-    throw 'Windows Update cleanup failed to restore service state after a partial stop.'
-}
-'@
-
-& ([scriptblock]::Create($contractSource))
-Write-Host 'Windows Update contract OK: cleanup requires stopped services and restores prior state.'
-Write-Host '== Read-only application self-test =='
-
-$settingsPath = Join-Path $env:APPDATA 'OpenRelax\settings.json'
-$autoCleanLogPath = Join-Path $env:APPDATA 'OpenRelax\autoclean.log'
-$settingsBefore = Get-FileFingerprint -Path $settingsPath
-$autoCleanLogBefore = Get-FileFingerprint -Path $autoCleanLogPath
-
-$windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
-    $windowsPowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
-}
-
-$startInfo = New-Object System.Diagnostics.ProcessStartInfo
-$startInfo.FileName = $windowsPowerShell
-$startInfo.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$appPath`" -SelfTest"
-$startInfo.WorkingDirectory = $repoRoot
-$startInfo.UseShellExecute = $false
-$startInfo.CreateNoWindow = $true
-$startInfo.RedirectStandardOutput = $true
-$startInfo.RedirectStandardError = $true
-
-$process = New-Object System.Diagnostics.Process
-$process.StartInfo = $startInfo
-
-if (-not $process.Start()) {
-    throw 'Could not start the OpenRelax self-test process.'
-}
-
-$stdout = $process.StandardOutput.ReadToEnd()
-$stderr = $process.StandardError.ReadToEnd()
-$process.WaitForExit()
-$exitCode = $process.ExitCode
-$process.Dispose()
-
-if ($stdout) {
-    Write-Host $stdout.TrimEnd()
-}
-if ($stderr) {
-    Write-Host $stderr.TrimEnd()
-}
-
-if ($exitCode -ne 0) {
-    throw "OpenRelax -SelfTest exited with code $exitCode."
-}
-# The banner must carry the version declared in the script itself.
-$versionMatch = [regex]::Match((Get-Content -LiteralPath $appPath -Raw), '\$script:AppVersion\s*=\s*''([^'']+)''')
-if (-not $versionMatch.Success) {
-    throw 'The $script:AppVersion assignment was not found in openrelax.ps1.'
-}
-$appVersion = $versionMatch.Groups[1].Value
-if ($stdout -notmatch ('OpenRelax v' + [regex]::Escape($appVersion) + '\b.* self-test')) {
-    throw "The self-test banner for version $appVersion was not found in the application output."
-}
-if ($stdout -notmatch 'Self-test OK') {
-    throw 'The application did not emit its Self-test OK completion marker.'
-}
-
-$settingsAfter = Get-FileFingerprint -Path $settingsPath
-$autoCleanLogAfter = Get-FileFingerprint -Path $autoCleanLogPath
-Assert-FileFingerprintUnchanged -Before $settingsBefore -After $settingsAfter -Label 'Settings file'
-Assert-FileFingerprintUnchanged -Before $autoCleanLogBefore -After $autoCleanLogAfter -Label 'AutoClean log'
-
-Write-Host 'Read-only contract OK: settings and AutoClean log were unchanged.'
-Write-Host 'Verification OK: parser clean, self-test completed and persistent state stayed unchanged.'

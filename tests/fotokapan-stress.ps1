@@ -13,17 +13,29 @@ param(
     [int]$BurstSec = 6,
     [int]$GapSec = 10,
     [int]$Workers = 8,
-    [int]$Threshold = 0   # 0 = baseline + 20 (an episode ends below threshold - 15, so it must sit above the idle load)
+    [int]$Threshold = 0,   # 0 = baseline + 20 (an episode ends below threshold - 15, so it must sit above the idle load)
+    [switch]$KeepArtifacts
 )
 $ErrorActionPreference = 'Stop'
+foreach ($value in @($Bursts,$BurstSec,$Workers)) { if ($value -lt 1) { throw 'Burst/worker values must be positive.' } }
+if ($Bursts -gt 10 -or $BurstSec -gt 30 -or $GapSec -lt 0 -or $GapSec -gt 60 -or $Workers -gt 64) { throw 'Stress run exceeds bounded limits.' }
 $failures = 0
+$script:Checks = [Collections.Generic.List[object]]::new()
 function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
+    $script:Checks.Add(@{ name = $Name; passed = $Ok; detail = $Detail })
     if (-not $Ok) { $script:failures++ }
     $mark = 'PASS'
     if (-not $Ok) { $mark = 'FAIL' }
     Write-Host ('[{0}] {1}  {2}' -f $mark, $Name, $Detail)
 }
 
+. (Join-Path $PSScriptRoot 'test-support.ps1')
+$workspace = New-TestWorkspace $Work
+$Work = $workspace.Path
+$burnerPids = [Collections.Generic.List[int]]::new()
+$ownedProcesses = [Collections.Generic.List[object]]::new()
+$monitor = $null
+try {
 $root = Split-Path -Parent $PSScriptRoot
 $trap = Join-Path $root 'fotokapan.ps1'
 if ($Threshold -le 0) {
@@ -39,15 +51,16 @@ if ($Threshold -le 0) {
 }
 $logDir = Join-Path $Work 'trap'
 $duration = 10 + $Bursts * ($BurstSec + $GapSec) + 12
-$monitor = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $trap),
-    '-Threshold', $Threshold, '-SustainSec', '4', '-DurationSec', $duration, '-LogDir', ('"{0}"' -f $logDir)
+$monitor = Start-OwnedTestProcess $Work ('-File "{0}" -Threshold {1} -SustainSec 4 -DurationSec {2} -LogDir "{3}"' -f $trap,$Threshold,$duration,$logDir)
+$ownedProcesses.Add($monitor)
 Start-Sleep -Seconds 10
 
 # --- burst storm, sampling the monitor's own cost ---
 $samples = New-Object System.Collections.Generic.List[object]
-$burner = '$m=''OPENRELAX-STRESS-BURST''; $e=(Get-Date).AddSeconds({0}); while((Get-Date) -lt $e){{}}' -f $BurstSec
+$burner = Join-Path $Work 'burner.ps1'
+[IO.File]::WriteAllText($burner,'param([int]$Seconds) $end=(Get-Date).AddSeconds($Seconds); while((Get-Date) -lt $end) {}')
 for ($b = 0; $b -lt $Bursts; $b++) {
-    1..$Workers | ForEach-Object { [void](Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', $burner) }
+    1..$Workers | ForEach-Object { $burn = Start-OwnedTestProcess $Work ('-File "{0}" -Seconds {1}' -f $burner,$BurstSec); $ownedProcesses.Add($burn); $burnerPids.Add($burn.Id) }
     $until = (Get-Date).AddSeconds($BurstSec + $GapSec)
     while ((Get-Date) -lt $until) {
         try {
@@ -58,11 +71,16 @@ for ($b = 0; $b -lt $Bursts; $b++) {
         Start-Sleep -Seconds 1
     }
 }
-$exited = $monitor.WaitForExit(($duration + 90) * 1000)
-Check 'monitor ran its full duration and exited' $exited
+$deadline = (Get-Date).AddSeconds($duration + 20)
+while (-not $monitor.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+if (-not $monitor.HasExited) { throw 'Owned monitor timed out.' }
+$monitor.WaitForExit()
+Check 'monitor ran its full duration and exited' ($monitor.ExitCode -eq 0 -and -not $monitor.TestStderr.Result)
+if ($monitor.ExitCode -ne 0 -or $monitor.TestStderr.Result) { throw ('Monitor failed: ' + $monitor.TestStderr.Result) }
 
 # --- JSONL contract ---
 $jsonl = Get-ChildItem -LiteralPath $logDir -Filter 'spikes-*.jsonl' | Select-Object -First 1
+if (-not $jsonl) { throw 'Monitor produced no JSONL.' }
 $lines = @(Get-Content -LiteralPath $jsonl.FullName -Encoding UTF8 | Where-Object { $_ })
 $records = New-Object System.Collections.Generic.List[object]
 $bad = 0
@@ -71,10 +89,11 @@ Check 'every JSONL line parses' ($bad -eq 0) ('{0} lines, {1} bad' -f $lines.Cou
 Check 'first record marks the monitor start' ($records.Count -gt 0 -and $records[0].kind -eq 'monitor' -and $records[0].version)
 $starts = @($records | Where-Object { $_.kind -eq 'start' })
 $ends = @($records | Where-Object { $_.kind -eq 'end' })
-Check 'bursts were caught' ($starts.Count -ge ($Bursts - 1) -and $starts.Count -le ($Bursts + 2)) ('{0} starts for {1} bursts' -f $starts.Count, $Bursts)
+Check 'bursts were caught' ($starts.Count -ge [Math]::Max(1,($Bursts - 1)) -and $starts.Count -le ($Bursts + 2)) ('{0} starts for {1} bursts' -f $starts.Count, $Bursts)
 Check 'every spike that ended has an end record' ($ends.Count -ge ($starts.Count - 1)) ('{0} ends' -f $ends.Count)
-$marked = @($starts | Where-Object { @($_.top).Count -gt 0 -and [string]$_.top[0].cmd -match 'OPENRELAX-STRESS-BURST' })
+$marked = @($starts | Where-Object { @($_.top).Count -gt 0 -and $burnerPids.Contains([int]$_.top[0].pid) })
 Check 'the burst processes are named as top culprit' ($marked.Count -ge [Math]::Ceiling($starts.Count * 0.6)) ('{0}/{1}' -f $marked.Count, $starts.Count)
+Check 'command arguments are absent from every process record' (@($records | ForEach-Object { @($_.top) + @($_.new) } | Where-Object { $_ -and $_.cmd }).Count -eq 0)
 $attributed = @($starts | Where-Object { [double]$_.total -gt 0 -and ([double]$_.attributed / [double]$_.total) -ge 0.7 })
 Check 'burst window attributes most of the CPU to processes' ($attributed.Count -ge [Math]::Ceiling($starts.Count * 0.6)) ('{0}/{1} with >= 70%' -f $attributed.Count, $starts.Count)
 $errorLines = @(Get-Content -LiteralPath (Get-ChildItem -LiteralPath $logDir -Filter 'fotokapan-*.log').FullName -Encoding UTF8 | Where-Object { $_ -match '! (Hata|CPU)' })
@@ -83,9 +102,10 @@ $beat = Get-Content -LiteralPath (Join-Path $logDir 'durum.json') -Raw | Convert
 Check 'heartbeat written' ($beat.version -and $beat.t)
 # Beats come every 60 s: over this run the file must have been rewritten at least once.
 $age = ([datetime]::ParseExact([string]$beat.t, 's', $null) - [datetime]::ParseExact([string]$beat.started, 's', $null)).TotalSeconds
-Check 'heartbeat refreshed during the run' ($age -ge 55) ('last beat {0:N0} s after start' -f $age)
+Check 'heartbeat refreshed during the run' ($duration -lt 60 -or $age -ge 55) ('last beat {0:N0} s after start' -f $age)
 
 # --- monitor overhead ---
+Check 'monitor cost has enough observations' ($samples.Count -ge 2)
 if ($samples.Count -ge 2) {
     $first = $samples[0]; $last = $samples[$samples.Count - 1]
     $span = ($last.T - $first.T).TotalSeconds
@@ -113,8 +133,20 @@ $script:TrapCache = @{}
 $dirty = Get-TrapEpisodes (Read-TrapRecords -Dir $damaged)
 Check 'reader skips damaged and half-written lines' ($dirty.Count -eq $clean.Count) ('{0} episodes clean, {1} with damage' -f $clean.Count, $dirty.Count)
 $culprits = @(Get-TrapCulprits $clean)
-Check 'culprit ranking puts the burst process first' ($culprits.Count -gt 0 -and $culprits[0].Name -eq 'powershell.exe') (($culprits | Select-Object -First 3 | ForEach-Object { '{0} x{1}' -f $_.Name, $_.Count }) -join ', ')
+Check 'culprit ranking accounts for all captured episodes' ($culprits.Count -gt 0 -and ($culprits | ForEach-Object { [int]$_['Count'] } | Measure-Object -Sum).Sum -eq $clean.Count)
+# Several burners share the load: the unassigned aggregate can outweigh each
+# individual burner. Never force a process diagnosis that the capture cannot prove.
+$capturedNames = @($starts | ForEach-Object { @($_.top) | ForEach-Object { $_.name } })
+Check 'culprit names come from capture or explicit unassigned CPU' (@($culprits | Where-Object { $_.Name -ne '*unattributed*' -and $_.Name -notin $capturedNames }).Count -eq 0)
 
-[System.IO.Directory]::Delete($Work, $true)
+} finally {
+    # Only processes returned by this invocation are stopped; retained PIDs are
+    # never used to discover/kill a possibly unrelated process after PID reuse.
+    foreach ($process in $ownedProcesses) {
+        try { if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() } } finally { $process.Dispose() }
+    }
+    @{ failures = $failures; checks = @($script:Checks.ToArray()); completedUtc = [datetime]::UtcNow.ToString('o') } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Work 'stress-report.json') -Encoding UTF8
+    if ($KeepArtifacts) { Write-Host "Artifacts: $Work" } else { Remove-TestWorkspace $workspace }
+}
 Write-Host ('Fotokapan stress: {0} failure(s)' -f $failures)
 exit [int]($failures -gt 0)

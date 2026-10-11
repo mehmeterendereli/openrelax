@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a concrete improvement and its safety boundary.
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Proposed behaviour and acceptance criteria
+      description: Describe the visible outcome and how it can be verified.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Permissions, data and alternatives
+      description: Name any new deletion targets, elevation, recording or external dependencies.

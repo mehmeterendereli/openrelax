@@ -21,11 +21,115 @@ jobs:
     name: Parser + safety contracts
     runs-on: windows-latest
     timeout-minutes: 10
+    env:
+      OPENRELAX_VISUAL_DIRNAME: openrelax-visual-${{ github.run_id }}-${{ github.run_attempt }}
+      OPENRELAX_EVIDENCE_DIRNAME: openrelax-evidence-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Verify parser, service-state guard and read-only self-test
+      - name: Verify all parsers, safety contracts and isolated end-to-end modes
+        id: verify
         shell: powershell
         run: .\tests\verify.ps1
+
+      - name: Verify bounded traversal over owned synthetic files
+        id: engine
+        shell: powershell
+        run: .\tests\engine-stress.ps1 -Dirs 8 -FilesPerDir 3
+
+      - name: Verify native control semantics and constrained viewport
+        id: ui
+        shell: powershell
+        run: .\tests\ui-smoke.ps1
+
+      - name: Verify active-worker exit
+        id: exit
+        shell: powershell
+        run: .\tests\exit-smoke.ps1
+
+      - name: Capture and verify all TR/EN renderers
+        id: visual
+        shell: powershell
+        run: .\tests\visual-smoke.ps1 -Work (Join-Path $env:RUNNER_TEMP $env:OPENRELAX_VISUAL_DIRNAME)
+
+      - name: Collect bounded review evidence and checked source archive
+        if: always()
+        shell: powershell
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          ENGINE_OUTCOME: ${{ steps.engine.outcome }}
+          UI_OUTCOME: ${{ steps.ui.outcome }}
+          EXIT_OUTCOME: ${{ steps.exit.outcome }}
+          VISUAL_OUTCOME: ${{ steps.visual.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $destination = Join-Path $env:RUNNER_TEMP $env:OPENRELAX_EVIDENCE_DIRNAME
+          $visualWork = Join-Path $env:RUNNER_TEMP $env:OPENRELAX_VISUAL_DIRNAME
+          if (Test-Path -LiteralPath $destination) { throw 'Evidence directory already exists.' }
+          [void][IO.Directory]::CreateDirectory($destination)
+          $checkedOutCommit = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkedOutCommit -notmatch '^[a-f0-9]{40}$') { throw 'Cannot identify tested source.' }
+          $outcomes = [ordered]@{
+            verification = $env:VERIFY_OUTCOME; engine = $env:ENGINE_OUTCOME
+            nativeUi = $env:UI_OUTCOME; activeWorkerExit = $env:EXIT_OUTCOME
+            visual = $env:VISUAL_OUTCOME
+          }
+          $passed = @($outcomes.Values | Where-Object { $_ -ne 'success' }).Count -eq 0
+          $captures = @()
+          Add-Type -AssemblyName System.Drawing
+          # Upload only named renderer files, never a full fixture, log, or user profile.
+          foreach ($language in 'tr','en') {
+            foreach ($page in 'dash','settings','disk','trap') {
+              $name = $language + '-' + $page + '.png'
+              $path = Join-Path $visualWork ('images/' + $name)
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+              $item = Get-Item -LiteralPath $path
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Capture links are not accepted.' }
+              $image = [Drawing.Image]::FromFile($path)
+              try {
+                $captures += [ordered]@{ file = $name; width = $image.Width; height = $image.Height; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+              } finally { $image.Dispose() }
+              Copy-Item -LiteralPath $path -Destination (Join-Path $destination $name)
+              Write-Host ("Capture {0}: {1}x{2}" -f $name,$captures[-1].width,$captures[-1].height)
+            }
+          }
+          $archiveRecord = $null
+          if ($passed) {
+            if ($captures.Count -ne 8) { throw 'Passing visual run must have all eight captures.' }
+            $archiveName = 'OpenRelax-2.1-Preview-' + $checkedOutCommit.Substring(0,12) + '-source.zip'
+            $archivePath = Join-Path $destination $archiveName
+            git archive --format=zip --prefix=OpenRelax-2.1-Preview/ --output=$archivePath HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Source archive creation failed.' }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
+            try {
+              $names = @($archive.Entries | ForEach-Object { $_.FullName })
+              foreach ($required in 'openrelax.ps1','fotokapan.ps1','lib/OpenRelax.Core.ps1','launch.bat','install-shortcut.ps1','docs/openrelax.ico','README.md','LICENSE') {
+                if (('OpenRelax-2.1-Preview/' + $required) -notin $names) { throw ('Incomplete source archive: ' + $required) }
+              }
+              if (@($names | Where-Object { $_ -match '(^|/)(\.git/|\.env($|[./])|settings\.json$|autoclean\.log$|durum\.json$|spikes-.*\.jsonl$)' }).Count) { throw 'Unexpected runtime or private file in source archive.' }
+            } finally { $archive.Dispose() }
+            $archiveRecord = [ordered]@{ file = $archiveName; sha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
+          [ordered]@{
+            schemaVersion = 1; repository = $env:GITHUB_REPOSITORY
+            runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT
+            testedCommit = $checkedOutCommit; eventCommit = $env:GITHUB_SHA
+            checksPassed = $passed; checks = $outcomes; captures = $captures
+            sourceArchive = $archiveRecord
+            boundary = 'Hosted Windows fixture captures, not a personal PC. A PR may test a generated merge commit. An artifact is not a signed binary, stable release, LTS commitment, SYSTEM/Windows Update integration test, physical keyboard, Narrator, or monitor-DPI-transition certification. Failed checks remain failed; incomplete images are retained only for diagnosis.'
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $destination 'evidence.json') -Encoding UTF8
+
+      - name: Upload named review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openrelax-windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ env.OPENRELAX_EVIDENCE_DIRNAME }}/
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: false

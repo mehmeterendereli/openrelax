@@ -1,80 +1,86 @@
-﻿# OpenRelax PC Care v2.1 LTS - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care v2.1 Preview - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
 #                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
 param(
     [switch]$AutoClean,
     [switch]$StartMinimized,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$TestMode,
+    [string]$FixtureRoot,
+    [string]$StateDir,
+    [string]$VisualReportDir,
+    [string]$UiAcceptanceReportDir,
+    [switch]$ExitDuringWorkerTest
 )
 
+if ($AutoClean -and $SelfTest) { throw 'AutoClean and SelfTest cannot be combined.' }
+if (($VisualReportDir -or $UiAcceptanceReportDir -or $ExitDuringWorkerTest) -and ($AutoClean -or $SelfTest)) { throw 'GUI test reports require GUI mode.' }
+
 $script:AppVersion   = '2.1'
-$script:AppEdition   = 'LTS'
+$script:AppEdition   = 'Preview'
 $script:ScriptPath   = $PSCommandPath
-$script:SettingsDir  = Join-Path $env:APPDATA 'OpenRelax'
+$script:TestMode = [bool]$TestMode
+if ($TestMode) {
+    if (-not $FixtureRoot -or -not $StateDir) { throw 'TestMode requires FixtureRoot and StateDir.' }
+    $FixtureRoot = [IO.Path]::GetFullPath($FixtureRoot)
+    $StateDir = [IO.Path]::GetFullPath($StateDir)
+    if (-not $StateDir.StartsWith($FixtureRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Test state must be inside the fixture root.'
+    }
+    . (Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1')
+    Assert-TestFixture $FixtureRoot
+    Assert-NoReparseAncestors $StateDir
+    foreach ($reportDir in @($VisualReportDir,$UiAcceptanceReportDir)) {
+        if ($reportDir) {
+            if (-not (Test-PathWithin $reportDir $FixtureRoot)) { throw 'GUI test output must be inside the fixture root.' }
+            Assert-NoReparseAncestors $reportDir
+        }
+    }
+    $env:OPENRELAX_FIXTURE_ROOT = $FixtureRoot
+}
+if (-not $TestMode) {
+    if ($StateDir) { throw 'StateDir requires TestMode.' }
+    foreach ($key in 'OPENRELAX_FIXTURE_ROOT','OPENRELAX_TRAP_DIR','OPENRELAX_STRESS','OPENRELAX_STRESS_REPORT','OPENRELAX_SMOKETEST') { Remove-Item ('Env:\' + $key) -ErrorAction SilentlyContinue }
+}
+if (($VisualReportDir -or $UiAcceptanceReportDir) -and -not $TestMode) { throw 'GUI reports require TestMode.' }
+if ($ExitDuringWorkerTest -and -not $TestMode) { throw 'Exit worker tests require TestMode.' }
+$script:SettingsDir = if ($StateDir) { [IO.Path]::GetFullPath($StateDir) } else { Join-Path $env:APPDATA 'OpenRelax' }
 $script:SettingsFile = Join-Path $script:SettingsDir 'settings.json'
 $script:IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
-#region 1. Settings (persisted to %APPDATA%\OpenRelax\settings.json)
-function Get-DefaultSettings {
-    return @{
-        language       = 'tr'
-        autoBoost      = $false
-        autoBoostLimit = 85
-        closeToTray    = $true
-        runAtStartup   = $false
-        weeklyClean    = $false
-        categories     = @{
-            temp     = $true
-            browser  = $true
-            discord  = $true
-            shader   = $true
-            wer      = $true
-            wu       = $false   # off by default: requires stopping Windows Update service
-            gpusetup = $true
-            recycle  = $true
-        }
-        stats          = @{
-            totalCleanedBytes = 0
-            totalRuns         = 0
-            lastClean         = ''
-        }
-    }
-}
-
-function Load-Settings {
-    $s = Get-DefaultSettings
-    if (Test-Path $script:SettingsFile) {
-        try {
-            $json = Get-Content $script:SettingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($prop in $json.PSObject.Properties) {
-                if (-not $s.ContainsKey($prop.Name)) { continue }
-                if ($s[$prop.Name] -is [hashtable]) {
-                    foreach ($sub in $prop.Value.PSObject.Properties) {
-                        if ($s[$prop.Name].ContainsKey($sub.Name)) { $s[$prop.Name][$sub.Name] = $sub.Value }
-                    }
-                } else {
-                    $s[$prop.Name] = $prop.Value
-                }
-            }
-        } catch {}
-    }
-    return $s
-}
-
-function Save-Settings {
-    try {
-        if (-not (Test-Path $script:SettingsDir)) { New-Item -ItemType Directory -Path $script:SettingsDir -Force | Out-Null }
-        $script:Settings | ConvertTo-Json -Depth 5 | Set-Content -Path $script:SettingsFile -Encoding UTF8
-    } catch {}
-}
-
-$script:Settings = Load-Settings
+#region 1. Settings and shared core
+. (Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1')
+$settingsDocument = Read-SettingsDocument $script:SettingsFile
+$script:Settings = $settingsDocument.Settings
+$script:SettingsValid = $settingsDocument.Valid
+$script:SettingsError = $settingsDocument.Error
+if ($TestMode) { $script:Settings.autoBoost = $false }
 #endregion
 
 #region 2. Localization (TR / EN string table)
 $script:Strings = @{
     tr = @{
+        accessibleClose = 'Pencereyi kapat veya tepsiye küçült'
+        accessibleMinimize = 'Pencereyi küçült'
+        accessibleLog = 'Bakım işlem günlüğü'
+        accessibleThreshold = 'Otomatik RAM işlemi eşiği'
+        logExitPending = 'Aktif işlem ve servis geri yüklemesi tamamlanınca çıkılacak.'
+        diskIncomplete = 'Analiz tamamlanamadı; erişilemeyen alanlar ve bağlantılar atlandı.'
+        diskEmpty = 'Klasör boyutlarını görmek için Analiz Et düğmesini kullanın.'
+        trapEmpty = 'Henüz sıçrama kaydı yok. Kurulduğunda eşik üstü CPU olayları burada görünür.'
+        scanFailed = 'Tarama başarısız'
+        scanIncomplete = 'Tarama eksik'
+        nothingSelected = 'Önce bir bakım işlemi seçin.'
+        optRam = 'Bakımda RAM çalışma setlerini daralt'
+        optDns = 'Bakımda DNS önbelleğini temizle'
+        confirmMaintenance = 'Bu işlemler uygulansın mı?'
+        warnRecycle = 'Geri Dönüşüm Kutusu kalıcı boşaltılır; dosyalar geri alınamaz.'
+        warnShader = 'Shader önbelleği yeniden oluşturulur; ilk açılış yavaşlayabilir.'
+        warnWer = 'Hata raporları tanılama için gerekebilir.'
+        warnWu = 'Windows Update servisleri geçici olarak durdurulur.'
+        logMaintenanceResult = 'Bakım: {0} · {1} dosya ({2}) · {3} atlanan · {4} hata'
+        logRamResult = 'Net bellek değişimi: {0} (geçici); {1} süreç başarılı, {2} atlandı/hata.'
         navDash          = 'Panel'
         navSettings      = 'Ayarlar'
         navDisk          = 'Disk Analizi'
@@ -91,8 +97,8 @@ $script:Strings = @{
         calculating      = 'Hesaplanıyor...'
         cleanState       = 'Temiz'
         headerTitle      = 'Sistem Bakımı ve Temizlik'
-        headerSub        = 'Tek butonla seçili kategorilerdeki önbellekleri ve disk çöplerini temizleyin, RAM bellek alanlarını boşaltın.'
-        btnOneClick      = 'Tek Tıkla Sistem Bakımı Yap'
+        headerSub        = 'Seçili işlemleri gözden geçirin. Dosyalar yalnız onayınızdan sonra temizlenir.'
+        btnOneClick      = 'Bakımı Gözden Geçir'
         btnCleaning      = 'Temizleniyor...'
         statusAdmin      = 'Durum: Yönetici Modu'
         statusUser       = 'Durum: Kullanıcı Modu'
@@ -152,7 +158,7 @@ $script:Strings = @{
         colPeak          = 'Tepe'
         colCulprit       = 'Sorumlu'
         colNote          = 'Not'
-        trapDrivers      = 'Sürücüler (kesme/DPC)'
+        trapDrivers      = 'CPU payı atanamadı'
         trapNoteScan     = 'Defender taraması'
         trapNoteRealtime = 'Defender gerçek zamanlı'
         trapCut          = 'kesildi'
@@ -178,7 +184,7 @@ $script:Strings = @{
         logCleanDone     = 'Temizlik tamamlandı: {0} dosya silindi ({1}).'
         logRamStart      = 'Bellek (RAM) optimizasyonu başlatıldı...'
         logRamDone       = 'RAM boşaltıldı: {0} geçici olarak geri kazanıldı.'
-        logRamNone       = 'Bellek zaten optimum seviyede.'
+        logRamNone       = 'Ölçülen net kullanılabilir bellek değişimi yok.'
         logRecycleDone   = 'Geri Dönüşüm Kutusu boşaltıldı.'
         logDnsDone       = 'DNS önbelleği temizlendi.'
         logAllDone       = 'Tüm bakım işlemleri tamamlandı!'
@@ -188,7 +194,7 @@ $script:Strings = @{
         logMaintStart    = 'Tek Tık Bakım başlatıldı...'
         logError         = 'Hata: {0}'
         logBusy          = 'Devam eden bir işlem var, lütfen bekleyin.'
-        logTaskTimeout   = 'İşlem 60 saniyedir ilerlemiyor, iptal edildi. Tekrar deneyebilirsiniz.'
+        logTaskTimeout   = 'İlerleme durdu. İşçinin iptal edilmesi bekleniyor.'
         logDiskStart     = 'Klasör boyutları hesaplanıyor...'
         logDiskDone      = 'Analiz bitti: {0} klasör tarandı.'
         logTaskCreated   = 'Haftalık temizlik görevi oluşturuldu.'
@@ -202,6 +208,26 @@ $script:Strings = @{
         logElevateFail   = 'Yönetici olarak başlatma iptal edildi.'
     }
     en = @{
+        accessibleClose = 'Close window or minimize to tray'
+        accessibleMinimize = 'Minimize window'
+        accessibleLog = 'Maintenance activity log'
+        accessibleThreshold = 'Automatic RAM threshold'
+        logExitPending = 'Exiting after the active operation and service restoration finish.'
+        diskIncomplete = 'Analysis incomplete; inaccessible entries and links were skipped.'
+        diskEmpty = 'Use Analyze to measure folder sizes.'
+        trapEmpty = 'No spikes recorded yet. After installation, sustained CPU spikes appear here.'
+        scanFailed = 'Scan failed'
+        scanIncomplete = 'Scan incomplete'
+        nothingSelected = 'Select a maintenance operation first.'
+        optRam = 'Trim RAM working sets during maintenance'
+        optDns = 'Clear DNS cache during maintenance'
+        confirmMaintenance = 'Apply these operations?'
+        warnRecycle = 'The Recycle Bin will be emptied permanently; files cannot be restored.'
+        warnShader = 'Shader caches rebuild; the next launch may be slower.'
+        warnWer = 'Error reports may be needed for diagnostics.'
+        warnWu = 'Windows Update services will be stopped temporarily.'
+        logMaintenanceResult = 'Maintenance: {0} · {1} files ({2}) · {3} skipped · {4} errors'
+        logRamResult = 'Net memory change: {0} (temporary); {1} processes succeeded, {2} skipped/failed.'
         navDash          = 'Dashboard'
         navSettings      = 'Settings'
         navDisk          = 'Disk Analysis'
@@ -218,8 +244,8 @@ $script:Strings = @{
         calculating      = 'Calculating...'
         cleanState       = 'Clean'
         headerTitle      = 'System Maintenance & Cleanup'
-        headerSub        = 'Clean caches and disk junk in the selected categories and trim RAM working sets with a single click.'
-        btnOneClick      = 'Run One-Click Maintenance'
+        headerSub        = 'Review selected operations. Files are cleaned only after your confirmation.'
+        btnOneClick      = 'Review Maintenance'
         btnCleaning      = 'Cleaning...'
         statusAdmin      = 'Status: Administrator Mode'
         statusUser       = 'Status: User Mode'
@@ -305,7 +331,7 @@ $script:Strings = @{
         logCleanDone     = 'Cleanup finished: {0} files deleted ({1}).'
         logRamStart      = 'RAM optimization started...'
         logRamDone       = 'RAM trimmed: {0} temporarily reclaimed.'
-        logRamNone       = 'Memory already at an optimal level.'
+        logRamNone       = 'No net change in measured available memory.'
         logRecycleDone   = 'Recycle Bin emptied.'
         logDnsDone       = 'DNS cache flushed.'
         logAllDone       = 'All maintenance tasks finished!'
@@ -315,7 +341,7 @@ $script:Strings = @{
         logMaintStart    = 'One-click maintenance started...'
         logError         = 'Error: {0}'
         logBusy          = 'A task is already running, please wait.'
-        logTaskTimeout   = 'Task made no progress for 60s and was cancelled. You can try again.'
+        logTaskTimeout   = 'Progress stopped. Waiting for worker cancellation to finish.'
         logDiskStart     = 'Calculating folder sizes...'
         logDiskDone      = 'Analysis finished: {0} folders scanned.'
         logTaskCreated   = 'Weekly cleanup task registered.'
@@ -345,11 +371,11 @@ function T {
 #region 3. Cleaning engine (pure functions - also injected into background runspaces)
 function Format-Bytes {
     param([long]$Bytes)
-    if ($Bytes -ge 1GB) {
+    if ([Math]::Abs([double]$Bytes) -ge 1GB) {
         return "$([Math]::Round($Bytes / 1GB, 2)) GB"
-    } elseif ($Bytes -ge 1MB) {
+    } elseif ([Math]::Abs([double]$Bytes) -ge 1MB) {
         return "$([Math]::Round($Bytes / 1MB, 1)) MB"
-    } elseif ($Bytes -ge 1KB) {
+    } elseif ([Math]::Abs([double]$Bytes) -ge 1KB) {
         return "$([Math]::Round($Bytes / 1KB, 0)) KB"
     } else {
         return "$Bytes B"
@@ -361,18 +387,32 @@ function Format-Bytes {
 # Windows\Prefetch (speeds up app launches), Windows\Logs and Panther (needed
 # for diagnostics and upgrade rollback).
 function Get-JunkCategories {
+    if ($env:OPENRELAX_FIXTURE_ROOT) {
+        $cats = @()
+        foreach ($key in 'temp','browser','discord','shader','wer','wu','gpusetup') {
+            $cats += @{ Key = $key; Paths = @(@{ Path = (Join-Path $env:OPENRELAX_FIXTURE_ROOT $key); Admin = ($key -in @('wer','wu','gpusetup')); MinAgeHours = 24 }) }
+        }
+        $cats += @{ Key = 'recycle'; Paths = @() }
+        foreach ($cat in $cats) { foreach ($target in $cat.Paths) { $target.ApprovedRoot = $env:OPENRELAX_FIXTURE_ROOT } }
+        return , $cats
+    }
     $cats = @()
 
     # Temp files (user temp, system temp, crash dumps)
     $p = @()
     # MinAgeHours: running apps (installers, dev/AI tools) keep working files
     # in temp; only files untouched for a day are considered junk.
-    if (Test-Path $env:TEMP) { $p += @{ Path = $env:TEMP; Admin = $false; MinAgeHours = 24 } }
+    $tempWarnings = @()
+    $knownTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+    if (Test-Path -LiteralPath $knownTemp) { $p += @{ Path = $knownTemp; Admin = $false; MinAgeHours = 24 } }
+    if ($env:TEMP -and -not ([IO.Path]::GetFullPath($env:TEMP).TrimEnd('\').Equals($knownTemp.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase))) {
+        $tempWarnings += 'Custom TEMP was skipped; only the known user Temp folder is approved.'
+    }
     $sysTemp = Join-Path $env:windir 'Temp'
     if (Test-Path $sysTemp) { $p += @{ Path = $sysTemp; Admin = $true; MinAgeHours = 24 } }
     $crashDumps = Join-Path $env:LOCALAPPDATA 'CrashDumps'
     if (Test-Path $crashDumps) { $p += @{ Path = $crashDumps; Admin = $false } }
-    $cats += @{ Key = 'temp'; Paths = $p }
+    $cats += @{ Key = 'temp'; Paths = $p; Warnings = $tempWarnings }
 
     # Browser caches - all Chromium profiles (Default + Profile N) and all cache types
     $p = @()
@@ -462,6 +502,7 @@ function Get-JunkCategories {
     # Recycle Bin (handled specially via Shell COM / Clear-RecycleBin)
     $cats += @{ Key = 'recycle'; Paths = @() }
 
+    foreach ($cat in $cats) { foreach ($target in $cat.Paths) { $target.ApprovedRoot = $target.Path } }
     return , $cats
 }
 
@@ -472,29 +513,25 @@ function Get-JunkCategories {
 # the watchdog; in the headless modes it is simply $null.
 function Measure-JunkPaths {
     param($Paths, [bool]$IsAdmin, [int]$BudgetSec = 0)
-    $size = [long]0; $count = [long]0; $lockedSize = [long]0; $seen = [long]0; $partial = $false
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    foreach ($p in $Paths) {
-        $accessible = $IsAdmin -or (-not $p.Admin)
+    $size = [long]0; $count = [long]0; $lockedSize = [long]0
+    $state = @{ Partial = $false; Skipped = 0; ErrorCount = 0; Errors = @() }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    foreach ($target in $Paths) {
+        if (-not (Test-Path -LiteralPath $target.Path)) { continue }
+        try { Assert-CleanupPath $target.Path $target.ApprovedRoot }
+        catch { $state.ErrorCount++; $state.Errors += $_.Exception.Message; continue }
         $cutoff = [datetime]::MaxValue
-        if ($p.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$p.MinAgeHours) }
-        try {
-            # do/while($false) gives 'break' a loop to exit, which stops the pipeline
-            do {
-                Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    if ($_.LastWriteTime -lt $cutoff) {
-                        if ($accessible) { $size += $_.Length; $count++ } else { $lockedSize += $_.Length }
-                    }
-                    if ((++$seen % 500) -eq 0) {
-                        if ($Sync) { $Sync.Beat = [DateTime]::UtcNow; $Sync.Step = $_.DirectoryName }
-                        if ($BudgetSec -gt 0 -and $sw.Elapsed.TotalSeconds -gt $BudgetSec) { $partial = $true; break }
-                    }
-                }
-            } while ($false)
-        } catch {}
-        if ($partial) { break }
+        if ($target.ContainsKey('MinAgeHours') -and $target.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$target.MinAgeHours) }
+        $remaining = if ($BudgetSec -gt 0) { [Math]::Max(1, $BudgetSec - [int]$clock.Elapsed.TotalSeconds) } else { 0 }
+        Get-SafeTreeEntries -Path $target.Path -State $state -BudgetSec $remaining | ForEach-Object {
+            if (-not $_.PSIsContainer -and $_.LastWriteTime -lt $cutoff) {
+                if ($IsAdmin -or -not $target.Admin) { $size += $_.Length; $count++ }
+                else { $lockedSize += $_.Length }
+            }
+        }
+        if ($state.Partial -or ($BudgetSec -gt 0 -and $clock.Elapsed.TotalSeconds -ge $BudgetSec)) { $state.Partial = $true; break }
     }
-    return @{ Size = $size; Count = $count; LockedSize = $lockedSize; Partial = $partial }
+    return @{ Size = $size; Count = $count; LockedSize = $lockedSize; Partial = $state.Partial; Errors = @($state.Errors) }
 }
 
 # Reads $Recycle.Bin directly instead of Shell.Application COM automation:
@@ -502,6 +539,7 @@ function Measure-JunkPaths {
 # pump, and its cross-apartment calls can block indefinitely waiting for an
 # LPC reply that only a pumping thread would service.
 function Get-RecycleBinInfo {
+    if ($env:OPENRELAX_FIXTURE_ROOT) { return @{ Size = 0; Count = 0 } }
     $size = [long]0; $count = [long]0
     try {
         $sid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
@@ -520,65 +558,83 @@ function Get-RecycleBinInfo {
 
 function Remove-JunkPaths {
     param($Paths, [bool]$IsAdmin)
-    $bytes = [long]0; $count = [long]0; $seen = [long]0
-    foreach ($p in $Paths) {
-        if ($p.Admin -and -not $IsAdmin) { continue }
+    $bytes = [long]0; $count = [long]0
+    $state = @{ Partial = $false; Skipped = 0; ErrorCount = 0; Errors = @() }
+    foreach ($target in $Paths) {
+        if ($target.Admin -and -not $IsAdmin) { $state.Skipped++; continue }
+        try {
+            if (-not (Test-Path -LiteralPath $target.Path -ErrorAction Stop)) { continue }
+            Assert-CleanupPath $target.Path $target.ApprovedRoot
+        } catch { $state.ErrorCount++; $state.Errors += $_.Exception.Message; continue }
         $cutoff = [datetime]::MaxValue
-        if ($p.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$p.MinAgeHours) }
-        # Streamed, not collected first: buffering and sorting millions of
-        # entries stalled cleaning of a large %TEMP% for minutes.
-        Get-ChildItem -LiteralPath $p.Path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            if ((++$seen % 500) -eq 0 -and $Sync) { $Sync.Beat = [DateTime]::UtcNow }
+        if ($target.ContainsKey('MinAgeHours') -and $target.MinAgeHours) { $cutoff = (Get-Date).AddHours(-$target.MinAgeHours) }
+        $directories = [Collections.Generic.List[string]]::new()
+        Get-SafeTreeEntries -Path $target.Path -State $state | ForEach-Object {
+            if ($_.PSIsContainer) { if (-not $target.ContainsKey('MinAgeHours') -or -not $target.MinAgeHours) { $directories.Add($_.FullName) }; return }
             if ($_.LastWriteTime -ge $cutoff) { return }
             try {
-                $len = $_.Length
-                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
-                $bytes += $len; $count++
-            } catch {
-                # Locked or in-use file - skip silently
-            }
+                Assert-NoReparseAncestors $_.FullName
+                $current = Get-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                if (($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $current.LastWriteTime -ge $cutoff) { return }
+                $length = $current.Length
+                Remove-Item -LiteralPath $current.FullName -Force -ErrorAction Stop
+                $bytes += $length; $count++
+            } catch { $state.Skipped++ }
         }
-        # Then drop folders left empty, deepest first. Directory.Delete only
-        # removes empty folders; reparse points (junctions) are left alone.
-        Get-ChildItem -LiteralPath $p.Path -Recurse -Directory -Force -ErrorAction SilentlyContinue |
-            ForEach-Object { if ((++$seen % 500) -eq 0 -and $Sync) { $Sync.Beat = [DateTime]::UtcNow }; $_ } |
-            Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-            Sort-Object -Property @{ Expression = { $_.FullName.Length } } -Descending |
-            ForEach-Object { try { [System.IO.Directory]::Delete($_.FullName) } catch {} }
+        # Temp directories may belong to active installers. Their small size does not justify removing them.
+        foreach ($directory in ($directories | Sort-Object Length -Descending)) {
+            try { Assert-NoReparseAncestors $directory; [IO.Directory]::Delete($directory) } catch {}
+        }
     }
-    return @{ Bytes = $bytes; Count = $count }
+    return @{ Bytes = $bytes; Count = $count; Skipped = $state.Skipped; Errors = @($state.Errors) }
+}
+
+function Wait-ServiceState {
+    param([string]$Name,[string]$State)
+    $service = Get-Service -Name $Name -ErrorAction Stop
+    if ([string]$service.Status -ne $State) {
+        $service.WaitForStatus([ServiceProcess.ServiceControllerStatus]$State,[TimeSpan]::FromSeconds(15))
+        $service.Refresh()
+    }
+    if ([string]$service.Status -ne $State) { throw "$Name did not reach $State." }
 }
 
 function Invoke-WindowsUpdateCacheCleanup {
     param($Paths, [bool]$IsAdmin)
-
-    if (-not $IsAdmin) {
-        throw 'Windows Update cache cleanup requires administrator privileges.'
+    if ($env:OPENRELAX_FIXTURE_ROOT) { return (Remove-JunkPaths $Paths $IsAdmin) }
+    if (-not $IsAdmin) { throw 'Windows Update cache cleanup requires administrator privileges.' }
+    $original = @{}
+    # Validate all states before changing either service.
+    foreach ($name in 'wuauserv','bits') {
+        $state = [string](Get-Service -Name $name -ErrorAction Stop).Status
+        if ($state -notin @('Running','Stopped')) { throw "$name is $state; Windows Update cleanup was refused." }
+        $original[$name] = $state
     }
-
-    $restartServices = @()
-    $restartErrors = @()
+    $restartServices = @(); $restartErrors = @(); $removed = $null
     try {
-        foreach ($name in 'wuauserv', 'bits') {
-            $service = Get-Service -Name $name -ErrorAction Stop
-            if ($service.Status -eq 'Running') {
-                Stop-Service -Name $name -Force -ErrorAction Stop
+        foreach ($name in 'wuauserv','bits') {
+            if ($original[$name] -eq 'Running') {
+                # Remember before attempting a stop that may throw after taking effect.
                 $restartServices += $name
+                # Refuse if running dependent services prevent a normal stop;
+                # Force could stop extra services that this operation cannot restore.
+                Stop-Service -Name $name -ErrorAction Stop
             }
+            Wait-ServiceState $name 'Stopped'
         }
-
-        return Remove-JunkPaths -Paths $Paths -IsAdmin:$IsAdmin
+        $removed = Remove-JunkPaths -Paths $Paths -IsAdmin:$IsAdmin
+        return $removed
     } finally {
         foreach ($name in $restartServices) {
             try {
-                Start-Service -Name $name -ErrorAction Stop
-            } catch {
-                $restartErrors += "$name`: $($_.Exception.Message)"
-            }
+                if ([string](Get-Service -Name $name -ErrorAction Stop).Status -ne 'Running') { Start-Service -Name $name -ErrorAction Stop }
+                Wait-ServiceState $name 'Running'
+            } catch { $restartErrors += "$name`: $($_.Exception.Message)" }
         }
-
-        if ($restartErrors.Count -gt 0) {
-            throw "Windows Update service state could not be restored: $($restartErrors -join '; ')"
+        if ($restartErrors.Count) {
+            $failure = [InvalidOperationException]::new("Windows Update service state could not be restored: $($restartErrors -join '; ')")
+            if ($removed) { $failure.Data['MaintenanceResult'] = $removed }
+            throw $failure
         }
     }
 }
@@ -586,6 +642,7 @@ function Invoke-WindowsUpdateCacheCleanup {
 # Trims process working sets via EmptyWorkingSet. Skips critical system
 # processes; the reclaimed number is transient by nature (pages return on use).
 function Invoke-RamTrim {
+    if ($env:OPENRELAX_FIXTURE_ROOT) { return @{ Success = 0; Fail = 0; Saved = 0 } }
     $skip = @('csrss', 'wininit', 'winlogon', 'lsass', 'services', 'smss', 'dwm',
               'fontdrvhost', 'Memory Compression', 'Registry', 'System', 'Idle', 'vmmem')
     $before = [Win32Helper]::GetMemoryStatus().ullAvailPhys
@@ -607,14 +664,14 @@ function Invoke-RamTrim {
     Start-Sleep -Milliseconds 300
     $after = [Win32Helper]::GetMemoryStatus().ullAvailPhys
     $saved = [long]0
-    if ($after -gt $before) { $saved = [long]($after - $before) }
+    $saved = [long]$after - [long]$before
     return @{ Success = $ok; Fail = $fail; Saved = $saved }
 }
 
 # Serialized engine source, injected into every background runspace so the
 # worker and the UI share a single implementation.
 $script:EngineCode = ''
-foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Invoke-WindowsUpdateCacheCleanup', 'Invoke-RamTrim') {
+foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Test-PathWithin', 'Assert-NoReparseAncestors', 'Assert-CleanupPath', 'Get-SafeTreeEntries', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Wait-ServiceState', 'Invoke-WindowsUpdateCacheCleanup', 'Invoke-RamTrim', 'Invoke-Maintenance') {
     $script:EngineCode += "function $fnName {`n" + (Get-Command $fnName).Definition + "`n}`n"
 }
 #endregion
@@ -627,9 +684,10 @@ param($Sync, $Opt)
 try {
     $cats = Get-JunkCategories
     $results = @{}
-    $totalSize = [long]0; $totalCount = [long]0; $lockedSize = [long]0; $partial = $false
+    $totalSize = [long]0; $totalCount = [long]0; $lockedSize = [long]0; $partial = $false; $errors = @()
     foreach ($cat in $cats) {
         $Sync.Step = $cat.Key
+        if ($cat.ContainsKey('Warnings')) { $errors += @($cat.Warnings) }
         if ($cat.Key -eq 'recycle') {
             $info = Get-RecycleBinInfo
             $results[$cat.Key] = @{ Size = $info.Size; Count = $info.Count }
@@ -639,96 +697,56 @@ try {
             $results[$cat.Key] = @{ Size = $m.Size; Count = $m.Count }
             $totalSize += $m.Size; $totalCount += $m.Count; $lockedSize += $m.LockedSize
             if ($m.Partial) { $partial = $true }
+            $errors += @($m.Errors)
         }
     }
-    $Sync.ScanResult = @{ Categories = $results; TotalSize = $totalSize; FileCount = $totalCount; LockedSize = $lockedSize; Partial = $partial }
+    $Sync.ScanResult = @{ Categories = $results; TotalSize = $totalSize; FileCount = $totalCount; LockedSize = $lockedSize; Partial = $partial; Status = $(if ($errors.Count -or $partial) { 'Partial' } else { 'Success' }); Errors = @($errors) }
 } catch {
     $Sync.Log.Enqueue(@{ Text = "Scan error: $($_.Exception.Message)"; Type = 'error' })
-    $Sync.ScanResult = @{ Categories = @{}; TotalSize = 0; FileCount = 0; LockedSize = 0 }
+    $Sync.ScanResult = @{ Categories = @{}; TotalSize = 0; FileCount = 0; LockedSize = 0; Status = 'Failed'; Errors = @($_.Exception.Message) }
 }
 '@
 
 $script:CleanTaskCode = @'
 param($Sync, $Opt)
-try {
-    $Sync.Log.Enqueue(@{ Key = 'logRamStart'; Type = 'info' })
-    $ram = Invoke-RamTrim
-    if ($ram.Saved -gt 0) {
-        $Sync.Log.Enqueue(@{ Key = 'logRamDone'; Args = @((Format-Bytes $ram.Saved)); Type = 'success' })
-    } else {
-        $Sync.Log.Enqueue(@{ Key = 'logRamNone'; Type = 'info' })
-    }
-
-    $Sync.Log.Enqueue(@{ Key = 'logCleanStart'; Type = 'info' })
-    $cats = Get-JunkCategories
-    $deletedBytes = [long]0; $deletedCount = [long]0
-    foreach ($cat in $cats) {
-        if ($Opt.Keys -notcontains $cat.Key) { continue }
-        if ($cat.Key -eq 'recycle') {
-            try {
-                Clear-RecycleBin -Force -ErrorAction Stop
-                $Sync.Log.Enqueue(@{ Key = 'logRecycleDone'; Type = 'success' })
-            } catch {}
-            continue
-        }
-        if ($cat.Key -eq 'wu') {
-            if (-not $Opt.IsAdmin) { continue }
-            try {
-                $Sync.Log.Enqueue(@{ Key = 'logWuStopped'; Type = 'info' })
-                $r = Invoke-WindowsUpdateCacheCleanup -Paths $cat.Paths -IsAdmin:$Opt.IsAdmin
-                $deletedBytes += $r.Bytes; $deletedCount += $r.Count
-                $Sync.Log.Enqueue(@{ Key = 'logWuStarted'; Type = 'info' })
-            } catch {
-                $Sync.Log.Enqueue(@{ Text = "Windows Update cleanup skipped: $($_.Exception.Message)"; Type = 'error' })
-            }
-            continue
-        }
-        $r = Remove-JunkPaths -Paths $cat.Paths -IsAdmin:$Opt.IsAdmin
-        $deletedBytes += $r.Bytes; $deletedCount += $r.Count
-    }
-    try {
-        Clear-DnsClientCache -ErrorAction SilentlyContinue
-        $Sync.Log.Enqueue(@{ Key = 'logDnsDone'; Type = 'success' })
-    } catch {}
-    $Sync.CleanResult = @{ Bytes = $deletedBytes; Count = $deletedCount }
-} catch {
-    $Sync.Log.Enqueue(@{ Text = "Clean error: $($_.Exception.Message)"; Type = 'error' })
-    $Sync.CleanResult = @{ Bytes = 0; Count = 0 }
-}
+try { $Sync.CleanResult = Invoke-Maintenance $Opt }
+catch { $Sync.CleanResult = @{ Bytes = 0; Count = 0; Skipped = 0; Errors = @($_.Exception.Message); Status = 'Failed'; Ram = $null } }
 '@
 
 $script:RamTaskCode = @'
 param($Sync, $Opt)
 try {
     $ram = Invoke-RamTrim
-    $Sync.RamResult = @{ Saved = $ram.Saved }
+    $Sync.RamResult = $ram
 } catch {
     $Sync.Log.Enqueue(@{ Text = "RAM task error: $($_.Exception.Message)"; Type = 'error' })
-    $Sync.RamResult = @{ Saved = 0 }
+    $Sync.RamResult = @{ Saved = 0; Success = 0; Fail = 1 }
 }
 '@
 
 $script:DiskTaskCode = @'
 param($Sync, $Opt)
 try {
-    $rows = @()
-    $dirs = Get-ChildItem -LiteralPath $Opt.Target -Directory -Force -ErrorAction SilentlyContinue
-    $seen = [long]0; $n = 0; $count = @($dirs).Count
+    Assert-NoReparseAncestors $Opt.Target
+    $rows = @(); $issues = @(); $partial = $false; $skipped = 0; $n = 0
+    $budget = [Diagnostics.Stopwatch]::StartNew()
+    $dirs = @(Get-ChildItem -LiteralPath $Opt.Target -Directory -Force -ErrorAction Stop)
     foreach ($d in $dirs) {
-        $n++
-        $Sync.DiskProgress = @($n, $count, $d.Name)
+        if (($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $skipped++; $partial = $true; continue }
+        if ($budget.Elapsed.TotalSeconds -ge 30) { $partial = $true; break }
+        $n++; $Sync.DiskProgress = @($n,$dirs.Count,$d.Name)
+        $state = @{ Partial = $false; Skipped = 0; ErrorCount = 0; Errors = @() }
         $sz = [long]0
-        Get-ChildItem -LiteralPath $d.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            $sz += $_.Length
-            if ((++$seen % 500) -eq 0) { $Sync.Beat = [DateTime]::UtcNow }
-        }
-        $rows += @{ Name = $d.Name; Size = $sz }
+        Get-SafeTreeEntries -Path $d.FullName -State $state -BudgetSec ([Math]::Max(1,[int](30 - $budget.Elapsed.TotalSeconds))) | ForEach-Object { if (-not $_.PSIsContainer) { $sz += $_.Length } }
+        $rowPartial = ($state.Partial -or $state.Skipped -or $state.ErrorCount)
+        if ($rowPartial) { $partial = $true }
+        $issues += @($state.Errors); $skipped += $state.Skipped
+        $rows += @{ Name = $d.Name; Size = $sz; Partial = [bool]$rowPartial }
     }
     $top = $rows | Sort-Object -Property @{ Expression = { $_.Size } } -Descending | Select-Object -First 10
-    $Sync.DiskResult = @{ Rows = @($top); Count = @($dirs).Count }
+    $Sync.DiskResult = @{ Rows = @($top); Count = $n; Status = $(if ($partial) { 'Partial' } else { 'Success' }); Errors = @($issues); Skipped = $skipped }
 } catch {
-    $Sync.Log.Enqueue(@{ Text = "Disk analysis error: $($_.Exception.Message)"; Type = 'error' })
-    $Sync.DiskResult = @{ Rows = @(); Count = 0 }
+    $Sync.DiskResult = @{ Rows = @(); Count = 0; Status = 'Failed'; Errors = @($_.Exception.Message); Skipped = 0 }
 }
 '@
 #endregion
@@ -738,14 +756,15 @@ $script:PsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\power
 
 function Set-StartupEntry {
     param([bool]$Enable)
+    if ($script:TestMode) { return @{ Ok = $false; Error = 'System integration is disabled in TestMode.' } }
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     try {
         if ($Enable) {
             $cmd = "`"$script:PsExe`" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -StartMinimized"
-            Set-ItemProperty -Path $runKey -Name 'OpenRelax' -Value $cmd
+            Set-ItemProperty -Path $runKey -Name 'OpenRelax' -Value $cmd -ErrorAction Stop
             return @{ Ok = $true; Key = 'logStartupOn' }
         } else {
-            Remove-ItemProperty -Path $runKey -Name 'OpenRelax' -ErrorAction SilentlyContinue
+            if ((Test-Path -LiteralPath $runKey) -and (Get-ItemProperty -LiteralPath $runKey -ErrorAction Stop).PSObject.Properties['OpenRelax']) { Remove-ItemProperty -LiteralPath $runKey -Name 'OpenRelax' -ErrorAction Stop }
             return @{ Ok = $true; Key = 'logStartupOff' }
         }
     } catch {
@@ -755,15 +774,16 @@ function Set-StartupEntry {
 
 function Set-WeeklyTask {
     param([bool]$Enable)
+    if ($script:TestMode) { return @{ Ok = $false; Error = 'System integration is disabled in TestMode.' } }
     $taskName = 'OpenRelax Weekly Clean'
     try {
         if ($Enable) {
             $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -AutoClean"
             $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '12:00'
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force | Out-Null
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force -ErrorAction Stop | Out-Null
             return @{ Ok = $true; Key = 'logTaskCreated' }
         } else {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            if (@(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object { $_.TaskName -eq $taskName }).Count) { Unregister-ScheduledTask -TaskName $taskName -TaskPath '\' -Confirm:$false -ErrorAction Stop }
             return @{ Ok = $true; Key = 'logTaskRemoved' }
         }
     } catch {
@@ -777,7 +797,9 @@ function Set-WeeklyTask {
 # while this GUI is starved, frozen or closed. OpenRelax installs it and reads
 # its machine-readable output: durum.json (heartbeat) and spikes-YYYY-MM.jsonl.
 $script:TrapTaskName = 'OpenRelax Fotokapan'
-$script:TrapDir      = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
+$script:TrapRoot     = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
+$script:TrapDir      = Join-Path $script:TrapRoot 'logs'
+$script:TrapInstalledScript = Join-Path $script:TrapRoot 'bin\fotokapan.ps1'
 # Test hook: tests\gui-stress.ps1 points the view at a synthetic data set
 if ($env:OPENRELAX_TRAP_DIR) { $script:TrapDir = $env:OPENRELAX_TRAP_DIR }
 $script:TrapScript   = Join-Path (Split-Path -Parent $script:ScriptPath) 'fotokapan.ps1'
@@ -797,6 +819,7 @@ function Read-SharedText([string]$Path) {
 function Get-TrapState {
     param([string]$Dir = $script:TrapDir)
     $st = @{ Installed = $false; Running = $false; Outdated = $false; Beat = $null; Threshold = 85; Spikes = 0 }
+    if ($script:TestMode) { return $st }
     $taskKnown = $true; $taskFound = $false; $taskRunning = $false
     try {
         $svc = New-Object -ComObject Schedule.Service
@@ -814,6 +837,7 @@ function Get-TrapState {
         if ($hr -ne -2147024894) { $taskKnown = $false }
     }
     $beatFile = Join-Path $Dir 'durum.json'
+    if (-not $script:TestMode -and -not (Test-Path -LiteralPath $beatFile)) { $beatFile = Join-Path $script:TrapRoot 'durum.json' }
     if (Test-Path -LiteralPath $beatFile) {
         try {
             $b = (Read-SharedText $beatFile) | ConvertFrom-Json
@@ -831,9 +855,15 @@ function Get-TrapState {
         $st.Installed = $fresh
         $st.Running = $fresh
     }
-    $installed = Join-Path $Dir 'fotokapan.ps1'
+    $installed = $script:TrapInstalledScript
+    if ($st.Installed -and -not (Test-Path -LiteralPath $installed)) { $st.Outdated = $true }
     if ($st.Installed -and (Test-Path -LiteralPath $installed) -and (Test-Path -LiteralPath $script:TrapScript)) {
-        try { $st.Outdated = (Get-FileHash -LiteralPath $installed).Hash -ne (Get-FileHash -LiteralPath $script:TrapScript).Hash } catch {}
+        try {
+            $st.Outdated = (Get-FileHash -LiteralPath $installed).Hash -ne (Get-FileHash -LiteralPath $script:TrapScript).Hash
+            $coreInstalled = Join-Path (Split-Path -Parent $installed) 'lib\OpenRelax.Core.ps1'
+            $coreSource = Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1'
+            if (-not (Test-Path -LiteralPath $coreInstalled) -or (Get-FileHash -LiteralPath $coreInstalled).Hash -ne (Get-FileHash -LiteralPath $coreSource).Hash) { $st.Outdated = $true }
+        } catch {}
     }
     return $st
 }
@@ -894,12 +924,12 @@ function Get-TrapEpisodes {
 }
 
 # The main culprit of an episode: its top process, unless CPU time that no
-# process accounts for (interrupts/DPCs, i.e. drivers) outweighs it.
+# process accounts for (exited/unreadable processes or interrupts/DPCs) outweighs it.
 function Get-TrapCulprit($Start) {
     $top = @($Start.top | Where-Object { $_ })
     $unattributed = [double]$Start.total - [double]$Start.attributed
     if ($top.Count -eq 0 -or $unattributed -gt [double]$top[0].pct) {
-        return @{ Name = '*drivers*'; Pct = [Math]::Max(0, $unattributed) }
+        return @{ Name = '*unattributed*'; Pct = [Math]::Max(0, $unattributed) }
     }
     return @{ Name = [string]$top[0].name; Pct = [double]$top[0].pct }
 }
@@ -925,44 +955,27 @@ function ConvertFrom-TrapTime([string]$Iso) {
 
 #region 6. Headless modes (-AutoClean / -SelfTest) - no GUI is loaded
 if ($AutoClean) {
-    $logFile = Join-Path $script:SettingsDir 'autoclean.log'
-    if (-not (Test-Path $script:SettingsDir)) { New-Item -ItemType Directory -Path $script:SettingsDir -Force | Out-Null }
-    $enabledKeys = @()
-    foreach ($k in $script:Settings.categories.Keys) {
-        if ($script:Settings.categories[$k]) { $enabledKeys += $k }
-    }
-    $bytes = [long]0; $count = [long]0
-    foreach ($cat in (Get-JunkCategories)) {
-        if ($enabledKeys -notcontains $cat.Key) { continue }
-        if ($cat.Key -eq 'recycle') {
-            try { Clear-RecycleBin -Force -ErrorAction Stop } catch {}
-            continue
-        }
-        if ($cat.Key -eq 'wu') {
-            if (-not $script:IsAdmin) { continue }
-            try {
-                $r = Invoke-WindowsUpdateCacheCleanup -Paths $cat.Paths -IsAdmin:$script:IsAdmin
-                $bytes += $r.Bytes; $count += $r.Count
-            } catch {}
-            continue
-        }
-        $r = Remove-JunkPaths -Paths $cat.Paths -IsAdmin:$script:IsAdmin
-        $bytes += $r.Bytes; $count += $r.Count
-    }
-    try { Clear-DnsClientCache -ErrorAction SilentlyContinue } catch {}
-    $script:Settings.stats.totalCleanedBytes = [long]$script:Settings.stats.totalCleanedBytes + $bytes
-    $script:Settings.stats.totalRuns = [int]$script:Settings.stats.totalRuns + 1
-    $script:Settings.stats.lastClean = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-    Save-Settings
-    Add-Content -Path $logFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') AutoClean: $count files deleted ($(Format-Bytes $bytes))"
+    if (-not $script:SettingsValid) { Write-Error ('AutoClean stopped: ' + $script:SettingsError); exit 1 }
+    $keys = @($script:Settings.categories.Keys | Where-Object { $script:Settings.categories[$_] })
+    $result = Invoke-Maintenance @{ Keys = $keys; IsAdmin = $script:IsAdmin; Headless = $true; Confirmed = $false; TrimRam = $false; ClearDns = $false }
+    try {
+        if ($result.Status -ne 'Failed') { Update-MaintenanceStats $result.Bytes }
+        $line = '{0} AutoClean: status={1}; files={2}; bytes={3}; skipped={4}; errors={5}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $result.Status, $result.Count, $result.Bytes, $result.Skipped, ($result.Errors -join '; ')
+        Add-Content -LiteralPath (Join-Path $script:SettingsDir 'autoclean.log') -Value $line -Encoding UTF8 -ErrorAction Stop
+        Write-Output $line
+    } catch { Write-Error ('AutoClean state could not be saved: ' + $_.Exception.Message); exit 1 }
+    if ($result.Status -eq 'Failed') { exit 1 }
+    if ($result.Status -eq 'Partial') { exit 2 }
     exit 0
 }
 
 if ($SelfTest) {
     Write-Host "OpenRelax v$script:AppVersion $script:AppEdition self-test (read-only scan)"
     Write-Host "Admin: $script:IsAdmin | Settings: $script:SettingsFile"
+    $scanIssues = @(); $scanPartial = $false
     $grandSize = [long]0; $grandCount = [long]0; $grandLocked = [long]0
     foreach ($cat in (Get-JunkCategories)) {
+        if ($cat.ContainsKey('Warnings')) { $scanIssues += @($cat.Warnings) }
         if ($cat.Key -eq 'recycle') {
             $info = Get-RecycleBinInfo
             Write-Host ("  {0,-10} {1,10}  ({2} items)" -f $cat.Key, (Format-Bytes $info.Size), $info.Count)
@@ -970,7 +983,8 @@ if ($SelfTest) {
         } else {
             $m = Measure-JunkPaths -Paths $cat.Paths -IsAdmin:$script:IsAdmin -BudgetSec 6
             $note = ''
-            if ($m.Partial) { $note = ' [partial: 6s budget hit, size is a lower bound]' }
+            $scanIssues += @($m.Errors)
+            if ($m.Partial) { $scanPartial = $true; $note = ' [partial: 6s budget hit, size is a lower bound]' }
             Write-Host ("  {0,-10} {1,10}  ({2} files, {3} paths, locked {4}){5}" -f $cat.Key, (Format-Bytes $m.Size), $m.Count, @($cat.Paths).Count, (Format-Bytes $m.LockedSize), $note)
             $grandSize += $m.Size; $grandCount += $m.Count; $grandLocked += $m.LockedSize
         }
@@ -985,6 +999,11 @@ if ($SelfTest) {
     foreach ($c in (Get-TrapCulprits $episodes | Select-Object -First 3)) {
         Write-Host ("  culprit {0,-28} x{1,-4} avg {2:N0}%" -f $c.Name, $c.Count, ($c.Sum / $c.Count))
     }
+    if ($scanIssues.Count -or $scanPartial) {
+        foreach ($issue in $scanIssues) { Write-Warning $issue }
+        Write-Warning 'Self-test incomplete: rejected/unreadable targets or scan budget reached.'
+        exit 2
+    }
     Write-Host "Self-test OK"
     exit 0
 }
@@ -993,19 +1012,55 @@ if ($SelfTest) {
 #region 7. GUI bootstrap
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+$script:GuiMutex = Get-SettingsMutex $script:SettingsFile -Scope 'GUI'
+$script:OwnGuiMutex = $false
+try { $script:OwnGuiMutex = $script:GuiMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $script:OwnGuiMutex = $true }
+if (-not $script:OwnGuiMutex) {
+    [void][Windows.Forms.MessageBox]::Show('OpenRelax is already open. Use its window or system tray icon.', 'OpenRelax')
+    $script:GuiMutex.Dispose()
+    exit 2
+}
 
-# Crisper text on high-DPI displays without changing the pixel layout
-# (DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED = -5, Windows 10 1809+)
+# Request GDI scaling without changing the fixed pixel layout. A host may have
+# already selected its DPI context; retain the actual result for diagnostics.
+$script:DpiInitialization = @{ Requested = 'UnawareGdiScaled'; Attempted = $false; Success = $false; Win32Error = $null; Error = $null }
 if (-not ([System.Management.Automation.PSTypeName]'OpenRelax.DpiHelper').Type) {
     try {
-        Add-Type -Namespace OpenRelax -Name DpiHelper -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);' -ErrorAction Stop
-    } catch {}
+        Add-Type -Namespace OpenRelax -Name DpiHelper -MemberDefinition @'
+[DllImport("user32.dll", SetLastError=true)]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+[DllImport("user32.dll")]
+public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+[DllImport("user32.dll")]
+public static extern IntPtr GetThreadDpiAwarenessContext();
+[DllImport("user32.dll")]
+public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr value);
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
+[DllImport("user32.dll")]
+public static extern uint GetDpiForWindow(IntPtr hwnd);
+'@ -ErrorAction Stop
+    } catch { $script:DpiInitialization.Error = $_.Exception.Message }
 }
 try {
     if (([System.Management.Automation.PSTypeName]'OpenRelax.DpiHelper').Type) {
-        [void][OpenRelax.DpiHelper]::SetProcessDpiAwarenessContext((New-Object IntPtr(-5)))
+        $script:DpiInitialization.Attempted = $true
+        $script:DpiInitialization.Success = [OpenRelax.DpiHelper]::SetProcessDpiAwarenessContext([IntPtr]::new(-5))
+        if (-not $script:DpiInitialization.Success) { $script:DpiInitialization.Win32Error = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
     }
-} catch {}
+} catch { $script:DpiInitialization.Error = $_.Exception.Message }
+
+function Get-WindowDpiDiagnostics([IntPtr]$Handle) {
+    $windowContext = [OpenRelax.DpiHelper]::GetWindowDpiAwarenessContext($Handle)
+    $threadContext = [OpenRelax.DpiHelper]::GetThreadDpiAwarenessContext()
+    $windowAwareness = [OpenRelax.DpiHelper]::GetAwarenessFromDpiAwarenessContext($windowContext)
+    $mode = switch ($windowAwareness) { 0 { 'Unaware' }; 1 { 'SystemAware' }; 2 { 'PerMonitor' }; default { 'Invalid' } }
+    if ([OpenRelax.DpiHelper]::AreDpiAwarenessContextsEqual($windowContext,[IntPtr]::new(-5))) { $mode = 'UnawareGdiScaled' }
+    elseif ([OpenRelax.DpiHelper]::AreDpiAwarenessContextsEqual($windowContext,[IntPtr]::new(-4))) { $mode = 'PerMonitorV2' }
+    return @{ Initialization = $script:DpiInitialization; WindowMode = $mode; WindowAwareness = $windowAwareness; ThreadAwareness = [OpenRelax.DpiHelper]::GetAwarenessFromDpiAwarenessContext($threadContext); WindowDpi = [int][OpenRelax.DpiHelper]::GetDpiForWindow($Handle); SessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId }
+}
 
 # Native Windows API helpers - a compile failure here is fatal, so surface it
 if (-not ([System.Management.Automation.PSTypeName]'Win32Helper').Type) {
@@ -1047,6 +1102,16 @@ if (-not ([System.Management.Automation.PSTypeName]'Win32Helper').Type) {
             return memStatus;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT { public int Left, Top, Right, Bottom; }
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetClientRect(IntPtr window, out RECT rect);
+        public static int GetClientWidth(IntPtr window) {
+            RECT rect;
+            return GetClientRect(window, out rect) ? rect.Right - rect.Left : 0;
+        }
+
         public static TimeSpan GetSystemUptime() {
             return TimeSpan.FromMilliseconds(GetTickCount64());
         }
@@ -1081,6 +1146,7 @@ $script:TickErrorShown = $false
 $script:LastBoost = [DateTime]::MinValue
 $script:BoostArmed = $true
 $script:ReallyExit = $false
+$script:ExitRequested = $false
 $script:BalloonShown = $false
 $script:UILoading = $true
 $script:CatSizes = @{}
@@ -1113,7 +1179,10 @@ function Set-RoundedRegion {
     $arcRect.X = 0
     $path.AddArc($arcRect, 90, 90)
     $path.CloseAllFigures()
+    $previousRegion = $control.Region
     $control.Region = New-Object System.Drawing.Region($path)
+    $path.Dispose()
+    if ($previousRegion) { $previousRegion.Dispose() }
 }
 
 $global:cardHoverStates = @{}
@@ -1184,7 +1253,9 @@ function Register-CardHover {
 #region 9. Main form and title bar
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "OpenRelax PC Care"
-$form.Size = New-Object System.Drawing.Size(680, 520)
+$form.Size = New-Object System.Drawing.Size(680, 590)
+$form.AutoScroll = $true
+$form.AutoScrollMinSize = New-Object Drawing.Size(680,590)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
 $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1306,8 +1377,8 @@ for ($i = 0; $i -lt $navButtons.Count; $i++) {
     $b.Location = New-Object System.Drawing.Point($navX, 3)
     $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $b.FlatAppearance.BorderSize = 0
-    $b.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
-    $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+    $b.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
     $b.Cursor = [System.Windows.Forms.Cursors]::Hand
     $b.Tag = $navTags[$i]
     $navPanel.Controls.Add($b)
@@ -1316,33 +1387,33 @@ for ($i = 0; $i -lt $navButtons.Count; $i++) {
 }
 
 $contentHost = New-Object System.Windows.Forms.Panel
-$contentHost.Size = New-Object System.Drawing.Size(644, 412)
+$contentHost.Size = New-Object System.Drawing.Size(644, 482)
 $contentHost.Location = New-Object System.Drawing.Point(18, 86)
 $contentHost.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $form.Controls.Add($contentHost)
 
 $viewDash = New-Object System.Windows.Forms.Panel
-$viewDash.Size = New-Object System.Drawing.Size(644, 412)
+$viewDash.Size = New-Object System.Drawing.Size(644, 482)
 $viewDash.Location = New-Object System.Drawing.Point(0, 0)
 $viewDash.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $contentHost.Controls.Add($viewDash)
 
 $viewSettings = New-Object System.Windows.Forms.Panel
-$viewSettings.Size = New-Object System.Drawing.Size(644, 412)
+$viewSettings.Size = New-Object System.Drawing.Size(644, 482)
 $viewSettings.Location = New-Object System.Drawing.Point(0, 0)
 $viewSettings.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $viewSettings.Visible = $false
 $contentHost.Controls.Add($viewSettings)
 
 $viewDisk = New-Object System.Windows.Forms.Panel
-$viewDisk.Size = New-Object System.Drawing.Size(644, 412)
+$viewDisk.Size = New-Object System.Drawing.Size(644, 482)
 $viewDisk.Location = New-Object System.Drawing.Point(0, 0)
 $viewDisk.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $viewDisk.Visible = $false
 $contentHost.Controls.Add($viewDisk)
 
 $viewTrap = New-Object System.Windows.Forms.Panel
-$viewTrap.Size = New-Object System.Drawing.Size(644, 412)
+$viewTrap.Size = New-Object System.Drawing.Size(644, 482)
 $viewTrap.Location = New-Object System.Drawing.Point(0, 0)
 $viewTrap.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $viewTrap.Visible = $false
@@ -1361,7 +1432,7 @@ function Show-View {
             $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
             $b.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
         } else {
-            $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+            $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
             $b.BackColor = [System.Drawing.Color]::Transparent
         }
     }
@@ -1379,7 +1450,7 @@ $btnNavTrap.add_Click($script:NavClickHandler)
 
 #region 11. Dashboard view - left column (RAM, CPU, system cards)
 $leftContainer = New-Object System.Windows.Forms.Panel
-$leftContainer.Size = New-Object System.Drawing.Size(260, 400)
+$leftContainer.Size = New-Object System.Drawing.Size(260, 470)
 $leftContainer.Location = New-Object System.Drawing.Point(0, 4)
 $leftContainer.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $viewDash.Controls.Add($leftContainer)
@@ -1388,7 +1459,7 @@ $viewDash.Controls.Add($leftContainer)
 $ramCard = Create-Card $leftContainer (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(260, 105))
 
 $ramTitle = New-Object System.Windows.Forms.Label
-$ramTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$ramTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $ramTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $ramTitle.Location = New-Object System.Drawing.Point(12, 10)
 $ramTitle.AutoSize = $true
@@ -1396,14 +1467,14 @@ $ramCard.Controls.Add($ramTitle)
 
 $ramDescLabel = New-Object System.Windows.Forms.Label
 $ramDescLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Regular)
-$ramDescLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$ramDescLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $ramDescLabel.Location = New-Object System.Drawing.Point(12, 30)
 $ramDescLabel.Size = New-Object System.Drawing.Size(145, 30)
 $ramCard.Controls.Add($ramDescLabel)
 
 $ramDetailsLabel = New-Object System.Windows.Forms.Label
 $ramDetailsLabel.Text = "0.0 GB / 0.0 GB"
-$ramDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$ramDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $ramDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
 $ramDetailsLabel.Location = New-Object System.Drawing.Point(12, 65)
 $ramDetailsLabel.Size = New-Object System.Drawing.Size(145, 20)
@@ -1448,7 +1519,7 @@ Register-CardHover $ramCard
 $cpuCard = Create-Card $leftContainer (New-Object System.Drawing.Point(0, 120)) (New-Object System.Drawing.Size(260, 105))
 
 $cpuTitle = New-Object System.Windows.Forms.Label
-$cpuTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$cpuTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $cpuTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $cpuTitle.Location = New-Object System.Drawing.Point(12, 10)
 $cpuTitle.AutoSize = $true
@@ -1463,8 +1534,8 @@ $cpuPercentLabel.AutoSize = $true
 $cpuCard.Controls.Add($cpuPercentLabel)
 
 $cpuDetailsLabel = New-Object System.Windows.Forms.Label
-$cpuDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Regular)
-$cpuDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$cpuDetailsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
+$cpuDetailsLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $cpuDetailsLabel.Location = New-Object System.Drawing.Point(12, 65)
 $cpuDetailsLabel.Size = New-Object System.Drawing.Size(85, 30)
 $cpuCard.Controls.Add($cpuDetailsLabel)
@@ -1524,22 +1595,22 @@ Register-CardHover $cpuCard
 $sysCard = Create-Card $leftContainer (New-Object System.Drawing.Point(0, 240)) (New-Object System.Drawing.Size(260, 135))
 
 $sysTitle = New-Object System.Windows.Forms.Label
-$sysTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$sysTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $sysTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $sysTitle.Location = New-Object System.Drawing.Point(12, 10)
 $sysTitle.AutoSize = $true
 $sysCard.Controls.Add($sysTitle)
 
 $lblUptimeName = New-Object System.Windows.Forms.Label
-$lblUptimeName.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblUptimeName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblUptimeName.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblUptimeName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblUptimeName.Location = New-Object System.Drawing.Point(12, 35)
 $lblUptimeName.AutoSize = $true
 $sysCard.Controls.Add($lblUptimeName)
 
 $lblUptimeVal = New-Object System.Windows.Forms.Label
 $lblUptimeVal.Text = "-"
-$lblUptimeVal.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblUptimeVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblUptimeVal.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $lblUptimeVal.Location = New-Object System.Drawing.Point(120, 35)
 $lblUptimeVal.Size = New-Object System.Drawing.Size(128, 20)
@@ -1547,15 +1618,15 @@ $lblUptimeVal.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $sysCard.Controls.Add($lblUptimeVal)
 
 $lblProcName = New-Object System.Windows.Forms.Label
-$lblProcName.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblProcName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblProcName.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblProcName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblProcName.Location = New-Object System.Drawing.Point(12, 65)
 $lblProcName.AutoSize = $true
 $sysCard.Controls.Add($lblProcName)
 
 $lblProcVal = New-Object System.Windows.Forms.Label
 $lblProcVal.Text = "-"
-$lblProcVal.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblProcVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblProcVal.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $lblProcVal.Location = New-Object System.Drawing.Point(120, 65)
 $lblProcVal.Size = New-Object System.Drawing.Size(128, 20)
@@ -1563,14 +1634,14 @@ $lblProcVal.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $sysCard.Controls.Add($lblProcVal)
 
 $lblJunkName = New-Object System.Windows.Forms.Label
-$lblJunkName.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblJunkName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblJunkName.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblJunkName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblJunkName.Location = New-Object System.Drawing.Point(12, 95)
 $lblJunkName.AutoSize = $true
 $sysCard.Controls.Add($lblJunkName)
 
 $lblJunkVal = New-Object System.Windows.Forms.Label
-$lblJunkVal.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblJunkVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblJunkVal.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $lblJunkVal.Location = New-Object System.Drawing.Point(120, 95)
 $lblJunkVal.Size = New-Object System.Drawing.Size(128, 20)
@@ -1582,7 +1653,7 @@ Register-CardHover $sysCard
 
 #region 12. Dashboard view - right column (header, action button, log, footer)
 $rightContainer = New-Object System.Windows.Forms.Panel
-$rightContainer.Size = New-Object System.Drawing.Size(368, 400)
+$rightContainer.Size = New-Object System.Drawing.Size(368, 470)
 $rightContainer.Location = New-Object System.Drawing.Point(276, 4)
 $rightContainer.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
 $viewDash.Controls.Add($rightContainer)
@@ -1595,8 +1666,8 @@ $headerTitle.AutoSize = $true
 $rightContainer.Controls.Add($headerTitle)
 
 $headerSub = New-Object System.Windows.Forms.Label
-$headerSub.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$headerSub.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$headerSub.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$headerSub.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $headerSub.Location = New-Object System.Drawing.Point(0, 26)
 $headerSub.Size = New-Object System.Drawing.Size(368, 36)
 $rightContainer.Controls.Add($headerSub)
@@ -1615,6 +1686,8 @@ $btnOneClick.add_MouseEnter({ $btnOneClick.Invalidate() })
 $btnOneClick.add_MouseLeave({ $btnOneClick.Invalidate() })
 $btnOneClick.add_MouseDown({ $btnOneClick.Invalidate() })
 $btnOneClick.add_MouseUp({ $btnOneClick.Invalidate() })
+$btnOneClick.add_GotFocus({ $btnOneClick.Invalidate() })
+$btnOneClick.add_LostFocus({ $btnOneClick.Invalidate() })
 
 $btnOneClick.add_Paint({
     param($sender, $e)
@@ -1656,6 +1729,9 @@ $btnOneClick.add_Paint({
     $sf.Alignment = [System.Drawing.StringAlignment]::Center
     $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
     $g.DrawString($sender.Text, $sender.Font, $textBrush, (New-Object System.Drawing.RectangleF(0, 0, $sender.Width, $sender.Height)), $sf)
+    if ($sender.Focused) {
+        [Windows.Forms.ControlPaint]::DrawFocusRectangle($g,[Drawing.Rectangle]::new(6,6,$sender.Width - 12,$sender.Height - 12),[Drawing.Color]::White,$color1)
+    }
 
     $brush.Dispose()
     $path.Dispose()
@@ -1702,87 +1778,73 @@ $logPanel.Controls.Add($logBox)
 
 # Footer: status, auto-boost switch, threshold selector
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblStatus.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblStatus.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblStatus.Location = New-Object System.Drawing.Point(0, 362)
-$lblStatus.Size = New-Object System.Drawing.Size(112, 20)
+$lblStatus.Size = New-Object System.Drawing.Size(368, 24)
 $rightContainer.Controls.Add($lblStatus)
 
 $lblAuto = New-Object System.Windows.Forms.Label
-$lblAuto.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$lblAuto.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblAuto.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$lblAuto.Location = New-Object System.Drawing.Point(112, 362)
-$lblAuto.Size = New-Object System.Drawing.Size(98, 20)
+$lblAuto.Location = New-Object System.Drawing.Point(0, 397)
+$lblAuto.Size = New-Object System.Drawing.Size(208, 24)
 $lblAuto.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $rightContainer.Controls.Add($lblAuto)
 
-$switchPanel = New-Object System.Windows.Forms.Panel
-$switchPanel.Size = New-Object System.Drawing.Size(36, 20)
-$switchPanel.Location = New-Object System.Drawing.Point(214, 361)
-$switchPanel.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#334155')
-$switchPanel.Cursor = [System.Windows.Forms.Cursors]::Hand
+$switchPanel = New-Object System.Windows.Forms.CheckBox
+$switchPanel.Size = New-Object System.Drawing.Size(22, 24)
+$switchPanel.Location = New-Object System.Drawing.Point(214, 393)
+$switchPanel.BackColor = [Drawing.Color]::Transparent
+$switchPanel.ForeColor = [Drawing.Color]::White
+$switchPanel.TabStop = $true
+$switchPanel.AccessibleName = 'Automatic RAM working set trimming'
+$switchPanel.Checked = [bool]$script:Settings.autoBoost
 $rightContainer.Controls.Add($switchPanel)
-Set-RoundedRegion $switchPanel 10
-
-$switchPanel.add_Paint({
-    param($sender, $e)
-    $g = $e.Graphics
-    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-
-    $bgBrush = if ($script:Settings.autoBoost) {
-        New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#10B981'))
-    } else {
-        New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#334155'))
-    }
-    $g.FillRectangle($bgBrush, 0, 0, $sender.Width, $sender.Height)
-    $bgBrush.Dispose()
-
-    $knobBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-    $knobX = if ($script:Settings.autoBoost) { 18 } else { 2 }
-    $g.FillEllipse($knobBrush, $knobX, 2, 16, 16)
-    $knobBrush.Dispose()
-})
-
-$switchPanel.add_Click({
-    $script:Settings.autoBoost = -not $script:Settings.autoBoost
-    Save-Settings
-    $switchPanel.Invalidate()
+$switchPanel.add_CheckedChanged({
+    if ($script:UILoading) { return }
+    $old = [bool]$script:Settings.autoBoost
+    $script:Settings.autoBoost = $switchPanel.Checked
+    if (-not (Save-Settings)) { $script:Settings.autoBoost = $old; $script:UILoading = $true; try { $switchPanel.Checked = $old } finally { $script:UILoading = $false } }
+    $cmbLimit.Enabled = $switchPanel.Checked
 })
 
 $lblLimit = New-Object System.Windows.Forms.Label
-$lblLimit.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$lblLimit.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblLimit.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$lblLimit.Location = New-Object System.Drawing.Point(256, 362)
+$lblLimit.Location = New-Object System.Drawing.Point(256, 397)
 $lblLimit.Size = New-Object System.Drawing.Size(46, 20)
 $lblLimit.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $rightContainer.Controls.Add($lblLimit)
 
 $cmbLimit = New-Object System.Windows.Forms.ComboBox
-$cmbLimit.Location = New-Object System.Drawing.Point(306, 360)
+$cmbLimit.Location = New-Object System.Drawing.Point(306, 393)
 $cmbLimit.Size = New-Object System.Drawing.Size(60, 22)
 $cmbLimit.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
 $cmbLimit.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $cmbLimit.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $cmbLimit.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-$cmbLimit.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$cmbLimit.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 foreach ($v in 70, 75, 80, 85, 90) { [void]$cmbLimit.Items.Add("%$v") }
 $limitIdx = [Array]::IndexOf(@(70, 75, 80, 85, 90), [int]$script:Settings.autoBoostLimit)
 if ($limitIdx -lt 0) { $limitIdx = 3 }
 $cmbLimit.SelectedIndex = $limitIdx
 $rightContainer.Controls.Add($cmbLimit)
+$cmbLimit.Enabled = $switchPanel.Checked
 
 $cmbLimit.add_SelectedIndexChanged({
     if ($script:UILoading) { return }
+    $old = [int]$script:Settings.autoBoostLimit
     $script:Settings.autoBoostLimit = [int]($cmbLimit.SelectedItem -replace '%', '')
-    Save-Settings
+    if (-not (Save-Settings)) { $script:Settings.autoBoostLimit = $old; $script:UILoading = $true; try { $cmbLimit.SelectedIndex = [Array]::IndexOf(@(70,75,80,85,90),$old) } finally { $script:UILoading = $false } }
 })
 #endregion
 
 #region 13. Settings view
-$catCard = Create-Card $viewSettings (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(316, 400))
+$catCard = Create-Card $viewSettings (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(316, 470))
 
 $catTitle = New-Object System.Windows.Forms.Label
-$catTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$catTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $catTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $catTitle.Location = New-Object System.Drawing.Point(12, 10)
 $catTitle.AutoSize = $true
@@ -1793,8 +1855,9 @@ $catCard.Controls.Add($catTitle)
 $script:CategoryChangedHandler = {
     param($sender, $e)
     if ($script:UILoading) { return }
+    $old = [bool]$script:Settings.categories[$sender.Tag]
     $script:Settings.categories[$sender.Tag] = $sender.Checked
-    Save-Settings
+    if (-not (Save-Settings)) { $script:Settings.categories[$sender.Tag] = $old; $script:UILoading = $true; try { $sender.Checked = $old } finally { $script:UILoading = $false } }
 }
 
 $catKeys = @('temp', 'browser', 'discord', 'shader', 'wer', 'wu', 'gpusetup', 'recycle')
@@ -1802,8 +1865,8 @@ $catY = 38
 foreach ($catKey in $catKeys) {
     $chk = New-Object System.Windows.Forms.CheckBox
     $chk.Location = New-Object System.Drawing.Point(14, $catY)
-    $chk.Size = New-Object System.Drawing.Size(288, 22)
-    $chk.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+    $chk.Size = New-Object System.Drawing.Size(288, 30)
+    $chk.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $chk.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
     $chk.BackColor = [System.Drawing.Color]::Transparent
     $chk.Tag = $catKey
@@ -1825,10 +1888,10 @@ foreach ($cat in (Get-JunkCategories)) {
     $script:CatAdminOnly[$cat.Key] = $allAdmin
 }
 
-$genCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 4)) (New-Object System.Drawing.Size(312, 230))
+$genCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 4)) (New-Object System.Drawing.Size(312, 300))
 
 $genTitle = New-Object System.Windows.Forms.Label
-$genTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$genTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $genTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $genTitle.Location = New-Object System.Drawing.Point(12, 10)
 $genTitle.AutoSize = $true
@@ -1837,32 +1900,33 @@ $genCard.Controls.Add($genTitle)
 $script:OptionChangedHandler = {
     param($sender, $e)
     if ($script:UILoading) { return }
-    switch ($sender.Tag) {
-        'tray' {
-            $script:Settings.closeToTray = $sender.Checked
-            Save-Settings
-        }
-        'startup' {
-            $script:Settings.runAtStartup = $sender.Checked
-            Save-Settings
-            $r = Set-StartupEntry $sender.Checked
-            if ($r.Ok) { Write-Log (T $r.Key) 'success' }
-            else { Write-Log ([string]::Format((T 'logError'), $r.Error)) 'error' }
-        }
-        'weekly' {
-            $script:Settings.weeklyClean = $sender.Checked
-            Save-Settings
-            $r = Set-WeeklyTask $sender.Checked
-            if ($r.Ok) { Write-Log (T $r.Key) 'success' }
-            else { Write-Log ([string]::Format((T 'logTaskError'), $r.Error)) 'error' }
-        }
+    $mapping = @{ tray = 'closeToTray'; startup = 'runAtStartup'; weekly = 'weeklyClean'; ram = 'trimRam'; dns = 'clearDns' }
+    $key = $mapping[$sender.Tag]
+    $old = [bool]$script:Settings[$key]
+    $operation = @{ Ok = $true }; $systemChanged = $false
+    if ($sender.Tag -eq 'startup') { $operation = Set-StartupEntry $sender.Checked }
+    if ($sender.Tag -eq 'weekly') { $operation = Set-WeeklyTask $sender.Checked }
+    if ($operation.Ok) {
+        $systemChanged = ($sender.Tag -in @('startup','weekly'))
+        $script:Settings[$key] = $sender.Checked
+        $operation.Ok = Save-Settings
+        if (-not $operation.Ok) { $operation.Error = $script:SettingsError }
     }
+    if (-not $operation.Ok) {
+        $script:Settings[$key] = $old
+        if ($systemChanged -and $sender.Tag -eq 'startup') { $rollback = Set-StartupEntry $old }
+        if ($systemChanged -and $sender.Tag -eq 'weekly') { $rollback = Set-WeeklyTask $old }
+        if ($systemChanged -and -not $rollback.Ok) { Write-Log ('Preference rollback failed: ' + $rollback.Error) 'error' }
+        $script:UILoading = $true
+        try { $sender.Checked = $old } finally { $script:UILoading = $false }
+        Write-Log ([string]::Format((T 'logError'), $operation.Error)) 'error'
+    } elseif ($operation.Key) { Write-Log (T $operation.Key) 'success' }
 }
 
 $chkTray = New-Object System.Windows.Forms.CheckBox
 $chkTray.Location = New-Object System.Drawing.Point(14, 38)
 $chkTray.Size = New-Object System.Drawing.Size(284, 22)
-$chkTray.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$chkTray.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $chkTray.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
 $chkTray.BackColor = [System.Drawing.Color]::Transparent
 $chkTray.Tag = 'tray'
@@ -1873,7 +1937,7 @@ $genCard.Controls.Add($chkTray)
 $chkStartup = New-Object System.Windows.Forms.CheckBox
 $chkStartup.Location = New-Object System.Drawing.Point(14, 68)
 $chkStartup.Size = New-Object System.Drawing.Size(284, 22)
-$chkStartup.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$chkStartup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $chkStartup.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
 $chkStartup.BackColor = [System.Drawing.Color]::Transparent
 $chkStartup.Tag = 'startup'
@@ -1884,7 +1948,7 @@ $genCard.Controls.Add($chkStartup)
 $chkWeekly = New-Object System.Windows.Forms.CheckBox
 $chkWeekly.Location = New-Object System.Drawing.Point(14, 98)
 $chkWeekly.Size = New-Object System.Drawing.Size(284, 22)
-$chkWeekly.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$chkWeekly.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $chkWeekly.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
 $chkWeekly.BackColor = [System.Drawing.Color]::Transparent
 $chkWeekly.Tag = 'weekly'
@@ -1893,20 +1957,20 @@ $chkWeekly.add_CheckedChanged($script:OptionChangedHandler)
 $genCard.Controls.Add($chkWeekly)
 
 $lblLang = New-Object System.Windows.Forms.Label
-$lblLang.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$lblLang.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblLang.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
-$lblLang.Location = New-Object System.Drawing.Point(14, 134)
+$lblLang.Location = New-Object System.Drawing.Point(14, 198)
 $lblLang.Size = New-Object System.Drawing.Size(90, 20)
 $genCard.Controls.Add($lblLang)
 
 $cmbLang = New-Object System.Windows.Forms.ComboBox
-$cmbLang.Location = New-Object System.Drawing.Point(110, 131)
+$cmbLang.Location = New-Object System.Drawing.Point(110, 195)
 $cmbLang.Size = New-Object System.Drawing.Size(120, 22)
 $cmbLang.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
 $cmbLang.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $cmbLang.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $cmbLang.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-$cmbLang.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$cmbLang.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 [void]$cmbLang.Items.Add('Türkçe')
 [void]$cmbLang.Items.Add('English')
 if ($script:Settings.language -eq 'en') { $cmbLang.SelectedIndex = 1 } else { $cmbLang.SelectedIndex = 0 }
@@ -1914,25 +1978,28 @@ $genCard.Controls.Add($cmbLang)
 
 $cmbLang.add_SelectedIndexChanged({
     if ($script:UILoading) { return }
+    $old = $script:Settings.language
     if ($cmbLang.SelectedIndex -eq 1) { $script:Settings.language = 'en' } else { $script:Settings.language = 'tr' }
-    Save-Settings
+    if (-not (Save-Settings)) { $script:Settings.language = $old }
     Apply-Language
 })
 
 $btnElevate = New-Object System.Windows.Forms.Button
 $btnElevate.Size = New-Object System.Drawing.Size(284, 34)
-$btnElevate.Location = New-Object System.Drawing.Point(14, 172)
+$btnElevate.Location = New-Object System.Drawing.Point(14, 240)
 $btnElevate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnElevate.FlatAppearance.BorderColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
 $btnElevate.FlatAppearance.BorderSize = 1
-$btnElevate.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnElevate.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $btnElevate.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
 $btnElevate.BackColor = [System.Drawing.Color]::Transparent
 $btnElevate.Cursor = [System.Windows.Forms.Cursors]::Hand
 $btnElevate.Visible = (-not $script:IsAdmin)
 $genCard.Controls.Add($btnElevate)
 
+$btnElevate.Enabled = (-not $script:TestMode)
 $btnElevate.add_Click({
+    if ($script:TestMode) { return }
     try {
         # Hidden like launch.bat: closing a stray console window would kill the app
         Start-Process -FilePath $script:PsExe -ArgumentList @('-STA', '-WindowStyle', 'Hidden', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script:ScriptPath`"") -Verb RunAs
@@ -1943,26 +2010,38 @@ $btnElevate.add_Click({
     }
 })
 
+$chkRam = New-Object System.Windows.Forms.CheckBox
+$chkDns = New-Object System.Windows.Forms.CheckBox
+foreach ($settingControl in @($chkRam,$chkDns)) {
+    $settingControl.Size = New-Object Drawing.Size(284, 28)
+    $settingControl.Font = New-Object Drawing.Font('Segoe UI', 9)
+    $settingControl.ForeColor = [Drawing.ColorTranslator]::FromHtml('#CBD5E1')
+    $settingControl.BackColor = [Drawing.Color]::Transparent
+    $settingControl.add_CheckedChanged($script:OptionChangedHandler)
+    $genCard.Controls.Add($settingControl)
+}
+$chkRam.Tag = 'ram'; $chkRam.Location = New-Object Drawing.Point(14,128); $chkRam.Checked = $script:Settings.trimRam
+$chkDns.Tag = 'dns'; $chkDns.Location = New-Object Drawing.Point(14,160); $chkDns.Checked = $script:Settings.clearDns
 Register-CardHover $genCard
 
-$statCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 250)) (New-Object System.Drawing.Size(312, 154))
+$statCard = Create-Card $viewSettings (New-Object System.Drawing.Point(332, 316)) (New-Object System.Drawing.Size(312, 154))
 
 $statTitle = New-Object System.Windows.Forms.Label
-$statTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$statTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $statTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $statTitle.Location = New-Object System.Drawing.Point(12, 10)
 $statTitle.AutoSize = $true
 $statCard.Controls.Add($statTitle)
 
 $lblStatTotalName = New-Object System.Windows.Forms.Label
-$lblStatTotalName.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblStatTotalName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblStatTotalName.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblStatTotalName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblStatTotalName.Location = New-Object System.Drawing.Point(12, 40)
 $lblStatTotalName.AutoSize = $true
 $statCard.Controls.Add($lblStatTotalName)
 
 $lblStatTotalVal = New-Object System.Windows.Forms.Label
-$lblStatTotalVal.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblStatTotalVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblStatTotalVal.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#10B981')
 $lblStatTotalVal.Location = New-Object System.Drawing.Point(160, 40)
 $lblStatTotalVal.Size = New-Object System.Drawing.Size(140, 20)
@@ -1970,14 +2049,14 @@ $lblStatTotalVal.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $statCard.Controls.Add($lblStatTotalVal)
 
 $lblStatRunsName = New-Object System.Windows.Forms.Label
-$lblStatRunsName.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblStatRunsName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblStatRunsName.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblStatRunsName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblStatRunsName.Location = New-Object System.Drawing.Point(12, 70)
 $lblStatRunsName.AutoSize = $true
 $statCard.Controls.Add($lblStatRunsName)
 
 $lblStatRunsVal = New-Object System.Windows.Forms.Label
-$lblStatRunsVal.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblStatRunsVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblStatRunsVal.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $lblStatRunsVal.Location = New-Object System.Drawing.Point(160, 70)
 $lblStatRunsVal.Size = New-Object System.Drawing.Size(140, 20)
@@ -1985,14 +2064,14 @@ $lblStatRunsVal.TextAlign = [System.Drawing.ContentAlignment]::TopRight
 $statCard.Controls.Add($lblStatRunsVal)
 
 $lblStatLastName = New-Object System.Windows.Forms.Label
-$lblStatLastName.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblStatLastName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$lblStatLastName.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblStatLastName.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $lblStatLastName.Location = New-Object System.Drawing.Point(12, 100)
 $lblStatLastName.AutoSize = $true
 $statCard.Controls.Add($lblStatLastName)
 
 $lblStatLastVal = New-Object System.Windows.Forms.Label
-$lblStatLastVal.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblStatLastVal.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblStatLastVal.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $lblStatLastVal.Location = New-Object System.Drawing.Point(160, 100)
 $lblStatLastVal.Size = New-Object System.Drawing.Size(140, 20)
@@ -2002,11 +2081,45 @@ $statCard.Controls.Add($lblStatLastVal)
 Register-CardHover $statCard
 #endregion
 
+function Fit-ListColumns($List) {
+    if (-not $List.Columns.Count) { return }
+    $width = $List.ClientSize.Width
+    if ($List.IsHandleCreated) { $nativeWidth = [Win32Helper]::GetClientWidth($List.Handle); if ($nativeWidth -gt 0) { $width = $nativeWidth } }
+    $used = 0
+    for ($i = 0; $i -lt ($List.Columns.Count - 1); $i++) { $used += $List.Columns[$i].Width }
+    $last = $List.Columns[$List.Columns.Count - 1]
+    $newWidth = [Math]::Max(60,$width - $used)
+    if ($last.Width -ne $newWidth) { $last.Width = $newWidth }
+}
+function Set-ListTheme($List) {
+    $List.OwnerDraw = $true
+    $List.add_ClientSizeChanged({ param($sender,$e) Fit-ListColumns $sender })
+    Fit-ListColumns $List
+    $List.add_DrawColumnHeader({ param($sender,$e)
+        $brush = [Drawing.SolidBrush]::new([Drawing.ColorTranslator]::FromHtml('#161F30'))
+        try { $e.Graphics.FillRectangle($brush,$e.Bounds); [Windows.Forms.TextRenderer]::DrawText($e.Graphics,$e.Header.Text,$sender.Font,$e.Bounds,[Drawing.ColorTranslator]::FromHtml('#E2E8F0'),[Windows.Forms.TextFormatFlags]'Left,VerticalCenter,EndEllipsis') } finally { $brush.Dispose() }
+    })
+    $List.add_DrawItem({ param($sender,$e) $e.DrawDefault = $true })
+    $List.add_DrawSubItem({ param($sender,$e) $e.DrawDefault = $true })
+}
+function New-EmptyState($Parent,$Y,$Height) {
+    $label = [Windows.Forms.Label]::new()
+    $label.Location = [Drawing.Point]::new(24,$Y)
+    $label.Size = [Drawing.Size]::new(596,$Height)
+    $label.Font = [Drawing.Font]::new('Segoe UI',9)
+    $label.ForeColor = [Drawing.ColorTranslator]::FromHtml('#94A3B8')
+    $label.BackColor = [Drawing.ColorTranslator]::FromHtml('#0B0F19')
+    $label.TextAlign = [Drawing.ContentAlignment]::MiddleCenter
+    $Parent.Controls.Add($label)
+    $label.BringToFront()
+    return $label
+}
+
 #region 14. Disk analysis view
 $diskCard = Create-Card $viewDisk (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(644, 400))
 
 $diskTitle = New-Object System.Windows.Forms.Label
-$diskTitle.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+$diskTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $diskTitle.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $diskTitle.Location = New-Object System.Drawing.Point(12, 10)
 $diskTitle.AutoSize = $true
@@ -2014,7 +2127,7 @@ $diskCard.Controls.Add($diskTitle)
 
 $diskDesc = New-Object System.Windows.Forms.Label
 $diskDesc.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$diskDesc.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#64748B')
+$diskDesc.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
 $diskDesc.Location = New-Object System.Drawing.Point(12, 30)
 $diskDesc.Size = New-Object System.Drawing.Size(470, 30)
 $diskCard.Controls.Add($diskDesc)
@@ -2025,7 +2138,7 @@ $btnAnalyze.Location = New-Object System.Drawing.Point(500, 14)
 $btnAnalyze.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnAnalyze.FlatAppearance.BorderColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
 $btnAnalyze.FlatAppearance.BorderSize = 1
-$btnAnalyze.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnAnalyze.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $btnAnalyze.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#3B82F6')
 $btnAnalyze.BackColor = [System.Drawing.Color]::Transparent
 $btnAnalyze.Cursor = [System.Windows.Forms.Cursors]::Hand
@@ -2044,6 +2157,8 @@ $lvDisk.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
 [void]$lvDisk.Columns.Add('Folder', 450)
 [void]$lvDisk.Columns.Add('Size', 140)
 $diskCard.Controls.Add($lvDisk)
+Set-ListTheme $lvDisk
+$lblDiskEmpty = New-EmptyState $diskCard 116 100
 
 Register-CardHover $diskCard
 #endregion
@@ -2068,7 +2183,7 @@ function New-TrapButton($Parent, $X, $Y, $Color) {
     $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $b.FlatAppearance.BorderColor = [System.Drawing.ColorTranslator]::FromHtml($Color)
     $b.FlatAppearance.BorderSize = 1
-    $b.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+    $b.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
     $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($Color)
     $b.BackColor = [System.Drawing.Color]::Transparent
     $b.Cursor = [System.Windows.Forms.Cursors]::Hand
@@ -2089,13 +2204,14 @@ function New-TrapList($Parent, $X, $Y, $W, $H, [int[]]$Widths) {
     $lv.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
     foreach ($w in $Widths) { [void]$lv.Columns.Add('', $w) }
     $Parent.Controls.Add($lv)
+    Set-ListTheme $lv
     return $lv
 }
 
 $trapCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(644, 96))
-$trapTitle = New-TrapLabel $trapCard 12 10 7.5 $true '#94A3B8'
-$lblTrapState = New-TrapLabel $trapCard 12 26 13 $true '#64748B'
-$lblTrapDetail = New-TrapLabel $trapCard 12 56 8 $false '#64748B'
+$trapTitle = New-TrapLabel $trapCard 12 10 9 $true '#94A3B8'
+$lblTrapState = New-TrapLabel $trapCard 12 26 13 $true '#94A3B8'
+$lblTrapDetail = New-TrapLabel $trapCard 12 56 9 $false '#94A3B8'
 $lblTrapDetail.AutoSize = $false
 $lblTrapDetail.Size = New-Object System.Drawing.Size(284, 36)
 $btnTrapInstall = New-TrapButton $trapCard 304 56 '#3B82F6'
@@ -2104,14 +2220,16 @@ $btnTrapLog = New-TrapButton $trapCard 528 56 '#94A3B8'
 Register-CardHover $trapCard
 
 $trapTopCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 106)) (New-Object System.Drawing.Size(644, 124))
-$trapTopTitle = New-TrapLabel $trapTopCard 12 8 7.5 $true '#94A3B8'
+$trapTopTitle = New-TrapLabel $trapTopCard 12 8 9 $true '#94A3B8'
 # Column widths leave room for the vertical scrollbar (no horizontal one)
 $lvTrapTop = New-TrapList $trapTopCard 12 28 620 88 @(290, 80, 90, 120)
+$lblTrapTopEmpty = New-EmptyState $trapTopCard 60 48
 Register-CardHover $trapTopCard
 
 $trapRecentCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 238)) (New-Object System.Drawing.Size(644, 166))
-$trapRecentTitle = New-TrapLabel $trapRecentCard 12 8 7.5 $true '#94A3B8'
-$lvTrapRecent = New-TrapList $trapRecentCard 12 28 620 130 @(110, 64, 56, 246, 110)
+$trapRecentTitle = New-TrapLabel $trapRecentCard 12 8 9 $true '#94A3B8'
+$lvTrapRecent = New-TrapList $trapRecentCard 12 28 620 130 @(110, 80, 56, 230, 110)
+$lblTrapRecentEmpty = New-EmptyState $trapRecentCard 68 60
 Register-CardHover $trapRecentCard
 
 $script:TrapProc = $null
@@ -2119,12 +2237,12 @@ $script:TrapLastState = $null
 $script:TrapSig = $null
 
 function Get-TrapCulpritText([string]$Name) {
-    if ($Name -eq '*drivers*') { return (T 'trapDrivers') }
+    if ($Name -in @('*drivers*','*unattributed*')) { return (T 'trapDrivers') }
     return $Name
 }
 
 function Set-TrapStateLabel($St) {
-    if (-not $St.Installed)  { $key = 'trapStMissing'; $color = '#64748B' }
+    if (-not $St.Installed)  { $key = 'trapStMissing'; $color = '#94A3B8' }
     elseif ($St.Outdated)    { $key = 'trapStUpdate';  $color = '#3B82F6' }
     elseif ($St.Running)     { $key = 'trapStRunning'; $color = '#10B981' }
     else                     { $key = 'trapStStopped'; $color = '#F59E0B' }
@@ -2154,6 +2272,8 @@ function Update-TrapLists($Episodes, $St) {
         [void]$lvTrapTop.Items.Add($item)
     }
     $lvTrapTop.EndUpdate()
+    Fit-ListColumns $lvTrapTop
+    $lblTrapTopEmpty.Visible = ($lvTrapTop.Items.Count -eq 0)
 
     $lvTrapRecent.BeginUpdate()
     $lvTrapRecent.Items.Clear()
@@ -2176,6 +2296,8 @@ function Update-TrapLists($Episodes, $St) {
         [void]$lvTrapRecent.Items.Add($item)
     }
     $lvTrapRecent.EndUpdate()
+    Fit-ListColumns $lvTrapRecent
+    $lblTrapRecentEmpty.Visible = ($lvTrapRecent.Items.Count -eq 0)
 }
 
 function Update-TrapView {
@@ -2202,9 +2324,11 @@ function Update-TrapView {
 }
 
 function Start-TrapAction([string]$Mode) {
+    if ($script:TestMode) { return }
     if ($script:TrapProc) { Write-Log (T 'logBusy') 'warn'; return }
     if (-not (Test-Path -LiteralPath $script:TrapScript)) { Write-Log (T 'logTrapNoScript') 'error'; return }
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ('"{0}"' -f $script:TrapScript), ('-' + $Mode))
+    if ($Mode -eq 'Install') { $argList += @('-ReaderSid',[Security.Principal.WindowsIdentity]::GetCurrent().User.Value) }
     $sp = @{ FilePath = $script:PsExe; ArgumentList = $argList; PassThru = $true; WindowStyle = 'Hidden' }
     # Registering a SYSTEM task needs elevation: ask through UAC when not admin.
     if (-not $script:IsAdmin) { $sp.Verb = 'RunAs' }
@@ -2328,7 +2452,7 @@ function Write-Log {
 
         $logBox.SelectionStart = $logBox.Text.Length
         $logBox.SelectionLength = 0
-        $logBox.SelectionColor = [System.Drawing.ColorTranslator]::FromHtml('#475569')
+        $logBox.SelectionColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
         $logBox.AppendText("[$timestamp] ")
 
         $prefix = "[i] "
@@ -2375,8 +2499,9 @@ function Start-EngineTask {
     [void]$ps.AddScript($script:EngineCode)
     [void]$ps.AddStatement().AddScript($TaskCode).AddArgument($script:Sync).AddArgument($Opt)
     $handle = $ps.BeginInvoke()
+    $script:Sync.Busy = $true
     $script:Sync.Beat = [DateTime]::UtcNow
-    [void]$script:Tasks.Add(@{ PS = $ps; RS = $rs; Handle = $handle })
+    [void]$script:Tasks.Add(@{ PS = $ps; RS = $rs; Handle = $handle; TimedOut = $false })
 }
 
 function Update-Status {
@@ -2417,13 +2542,17 @@ function Start-ScanTask {
 function Complete-Scan {
     param($r)
     $script:CatSizes = @{}
+    $script:LastScanResult = $r
     foreach ($k in $r.Categories.Keys) { $script:CatSizes[$k] = $r.Categories[$k].Size }
     if ($r.TotalSize -gt 0) {
         $lblJunkVal.Text = Format-Bytes ([long]$r.TotalSize)
         # Time-capped scan: the real total is at least this much
         if ($r.Partial) { $lblJunkVal.Text = '≥ ' + $lblJunkVal.Text }
     }
+    elseif ($r.Status -eq 'Failed') { $lblJunkVal.Text = (T 'scanFailed') }
+    elseif ($r.Status -eq 'Partial') { $lblJunkVal.Text = (T 'scanIncomplete') }
     else { $lblJunkVal.Text = (T 'cleanState') }
+    foreach ($scanError in $r.Errors) { Write-Log $scanError 'warn' }
     Write-Log ([string]::Format((T 'logScanDone'), $r.FileCount, (Format-Bytes ([long]$r.TotalSize)))) 'info'
     if ($r.LockedSize -gt 0) {
         Write-Log ([string]::Format((T 'logScanAdminExtra'), (Format-Bytes ([long]$r.LockedSize)))) 'warn'
@@ -2438,23 +2567,22 @@ function Complete-Scan {
 
 function Complete-Clean {
     param($r)
-    $script:Settings.stats.totalCleanedBytes = [long]$script:Settings.stats.totalCleanedBytes + [long]$r.Bytes
-    $script:Settings.stats.totalRuns = [int]$script:Settings.stats.totalRuns + 1
-    $script:Settings.stats.lastClean = (Get-Date).ToString('yyyy-MM-dd HH:mm')
-    Save-Settings
-    Update-StatsUI
-    Write-Log ([string]::Format((T 'logCleanDone'), $r.Count, (Format-Bytes ([long]$r.Bytes)))) 'success'
-    Write-Log (T 'logAllDone') 'success'
-    # Rescan so the junk size reflects the cleanup; button re-enables after it
-    Start-EngineTask $script:ScanTaskCode @{ IsAdmin = $script:IsAdmin }
-    $lblJunkVal.Text = (T 'calculating')
+    $level = if ($r.Status -eq 'Success') { 'success' } elseif ($r.Status -eq 'Partial') { 'warn' } else { 'error' }
+    try {
+        if ($r.Status -ne 'Failed') { Update-MaintenanceStats ([long]$r.Bytes); Update-StatsUI }
+    } catch { Write-Log ('Settings could not be saved: ' + $_.Exception.Message) 'error'; $level = 'error' }
+    Write-Log ([string]::Format((T 'logMaintenanceResult'), $r.Status, $r.Count, (Format-Bytes ([long]$r.Bytes)), $r.Skipped, $r.Errors.Count)) $level
+    foreach ($maintenanceError in $r.Errors) { Write-Log $maintenanceError 'error' }
+    if ($r.Ram) { Write-Log ([string]::Format((T 'logRamResult'), (Format-Bytes ([long]$r.Ram.Saved)), $r.Ram.Success, $r.Ram.Fail)) 'info' }
+    if (-not $script:ExitRequested) {
+        Start-EngineTask $script:ScanTaskCode @{ IsAdmin = $script:IsAdmin }
+        $lblJunkVal.Text = (T 'calculating')
+    }
 }
 
 function Complete-Ram {
     param($r)
-    if ($r.Saved -gt 0) {
-        Write-Log ([string]::Format((T 'logRamDone'), (Format-Bytes ([long]$r.Saved)))) 'success'
-    }
+    Write-Log ([string]::Format((T 'logRamResult'), (Format-Bytes ([long]$r.Saved)), $r.Success, $r.Fail)) 'info'
     $script:Sync.Busy = $false
     Update-Status
 }
@@ -2466,10 +2594,16 @@ function Complete-Disk {
     $lvDisk.Items.Clear()
     foreach ($row in $r.Rows) {
         $item = New-Object System.Windows.Forms.ListViewItem($row.Name)
-        [void]$item.SubItems.Add((Format-Bytes ([long]$row.Size)))
+        $sizeText = Format-Bytes ([long]$row.Size)
+        if ($row.Partial) { $sizeText = '≥ ' + $sizeText }
+        [void]$item.SubItems.Add($sizeText)
         [void]$lvDisk.Items.Add($item)
     }
-    Write-Log ([string]::Format((T 'logDiskDone'), $r.Count)) 'success'
+    Fit-ListColumns $lvDisk
+    $lblDiskEmpty.Visible = ($lvDisk.Items.Count -eq 0)
+    if ($r.Status -eq 'Success') { Write-Log ([string]::Format((T 'logDiskDone'), $r.Count)) 'success' }
+    else { $diskDesc.Text = T 'diskIncomplete'; $lblDiskEmpty.Text = T 'diskIncomplete'; Write-Log (T 'diskIncomplete') 'warn' }
+    foreach ($issue in $r.Errors) { Write-Log $issue 'error' }
     $btnAnalyze.Enabled = $true
     $btnAnalyze.Text = (T 'btnAnalyze')
     $script:Sync.Busy = $false
@@ -2563,6 +2697,7 @@ if ($script:StressCycles -gt 0) {
                     version = "$script:AppVersion $script:AppEdition"; cycles = $script:StressCycles; scans = $script:StressScans
                     seconds = [Math]::Round($script:StressClock.Elapsed.TotalSeconds, 1); busyAtEnd = [bool]$script:Sync.Busy
                     logErrors = [int]$script:LogErrors; lastError = [string]$script:LastErrorText; tickError = [bool]$script:TickErrorShown
+                    lastScanStatus = $(if ($script:LastScanResult) { $script:LastScanResult.Status } else { '' })
                     errors = $script:StressErrors.ToArray(); samples = $script:StressSamples.ToArray()
                 }
                 if ($script:StressReport) { ConvertTo-Json -InputObject $report -Depth 5 | Set-Content -LiteralPath $script:StressReport -Encoding UTF8 }
@@ -2602,30 +2737,28 @@ $pump.add_Tick({
                 try { $t.PS.Dispose() } catch {}
                 try { $t.RS.Dispose() } catch {}
                 $script:Tasks.RemoveAt($i)
-            } elseif (([DateTime]::UtcNow - [DateTime]$script:Sync.Beat).TotalSeconds -gt 60) {
+                if ($t.TimedOut) {
+                    $script:Sync.Busy = $false
+                    $script:Sync.ScanResult = $null; $script:Sync.CleanResult = $null; $script:Sync.RamResult = $null; $script:Sync.DiskResult = $null
+                    $btnOneClick.Enabled = $true; $btnOneClick.Text = (T 'btnOneClick')
+                    $btnAnalyze.Enabled = $true; $btnAnalyze.Text = (T 'btnAnalyze')
+                    Update-Status
+                }
+            } elseif (-not $t.TimedOut -and ([DateTime]::UtcNow - [DateTime]$script:Sync.Beat).TotalSeconds -gt 60) {
                 # Watchdog: workers post a progress beat to $Sync.Beat every
                 # 500 files. Long runs are legitimate (cleaning a %TEMP% with
                 # hundreds of thousands of folders takes minutes), so only a
                 # worker that made no progress for 60s - blocked in native
                 # I/O, where even the debugger cannot break in - is abandoned
-                # and the UI reset so the user can retry. BeginStop is async on
+                # and the UI remains busy until cancellation actually completes. BeginStop is async on
                 # purpose: Stop()/Dispose() could block just as badly if the
                 # thread is genuinely stuck.
                 # Name where it stalled: the category or the last folder with progress
                 Write-Log ('{0} [{1}]' -f (T 'logTaskTimeout'), $script:Sync.Step) 'error'
-                try { [void]$t.PS.BeginStop({}, $null) } catch {}
-                $script:Tasks.RemoveAt($i)
-                $script:Sync.Busy = $false
-                $script:Sync.ScanResult = $null
-                $btnOneClick.Enabled = $true
-                $btnOneClick.Text = (T 'btnOneClick')
-                $btnOneClick.Invalidate()
-                $btnAnalyze.Enabled = $true
-                $btnAnalyze.Text = (T 'btnAnalyze')
-                $script:Sync.DiskProgress = $null
-                $diskDesc.Text = (T 'diskDesc')
-                $lblJunkVal.Text = '—'
-                Update-Status
+                try { [void]$t.PS.BeginStop($null, $null) } catch {}
+                $t.TimedOut = $true
+                $btnOneClick.Enabled = $false
+                $btnAnalyze.Enabled = $false
             }
         }
 
@@ -2636,11 +2769,15 @@ $pump.add_Tick({
         }
         if ($script:TrapProc) { Complete-TrapAction }
 
+        $cancelling = @($script:Tasks | Where-Object { $_.TimedOut }).Count -gt 0
+        if (-not $cancelling) {
         if ($script:Sync.ScanResult)  { $r = $script:Sync.ScanResult;  $script:Sync.ScanResult = $null;  Complete-Scan $r }
         if ($script:Sync.CleanResult) { $r = $script:Sync.CleanResult; $script:Sync.CleanResult = $null; Complete-Clean $r }
         if ($script:Sync.RamResult)   { $r = $script:Sync.RamResult;   $script:Sync.RamResult = $null;   Complete-Ram $r }
         if ($script:Sync.DiskResult)  { $r = $script:Sync.DiskResult;  $script:Sync.DiskResult = $null;  Complete-Disk $r }
-    } catch {}
+        }
+        if ($script:ExitRequested -and $script:Tasks.Count -eq 0) { $form.Close() }
+    } catch { Write-Log ([string]::Format((T 'logError'), $_.Exception.Message)) 'error' }
 })
 #endregion
 
@@ -2650,6 +2787,18 @@ $btnOneClick.add_Click({
         Write-Log (T 'logBusy') 'warn'
         return
     }
+    $selected = @($script:Settings.categories.Keys | Where-Object { $script:Settings.categories[$_] })
+    if (-not $selected.Count -and -not $script:Settings.trimRam -and -not $script:Settings.clearDns) { Write-Log (T 'nothingSelected') 'warn'; return }
+    $names = @($selected | ForEach-Object { T ('cat_' + $_) })
+    if ($script:Settings.trimRam) { $names += T 'optRam' }
+    if ($script:Settings.clearDns) { $names += T 'optDns' }
+    $message = (T 'confirmMaintenance') + "`r`n`r`n" + ($names -join "`r`n")
+    if ($selected -contains 'recycle') { $message += "`r`n`r`n" + (T 'warnRecycle') }
+    if ($selected -contains 'shader') { $message += "`r`n" + (T 'warnShader') }
+    if ($selected -contains 'wer') { $message += "`r`n" + (T 'warnWer') }
+    if ($selected -contains 'wu') { $message += "`r`n" + (T 'warnWu') }
+    $answer = [Windows.Forms.MessageBox]::Show($form, $message, 'OpenRelax', [Windows.Forms.MessageBoxButtons]::OKCancel, [Windows.Forms.MessageBoxIcon]::Warning, [Windows.Forms.MessageBoxDefaultButton]::Button2)
+    if ($answer -ne [Windows.Forms.DialogResult]::OK) { return }
     $script:Sync.Busy = $true
     $btnOneClick.Enabled = $false
     $btnOneClick.Text = (T 'btnCleaning')
@@ -2660,7 +2809,7 @@ $btnOneClick.add_Click({
     foreach ($k in $script:Settings.categories.Keys) {
         if ($script:Settings.categories[$k]) { $keys += $k }
     }
-    Start-EngineTask $script:CleanTaskCode @{ IsAdmin = $script:IsAdmin; Keys = $keys }
+    Start-EngineTask $script:CleanTaskCode @{ IsAdmin = $script:IsAdmin; Keys = $keys; Confirmed = $true; Headless = $false; TrimRam = $script:Settings.trimRam; ClearDns = $script:Settings.clearDns }
 })
 
 $btnAnalyze.add_Click({
@@ -2673,12 +2822,32 @@ $btnAnalyze.add_Click({
     $btnAnalyze.Text = (T 'analyzing')
     Update-Status
     Write-Log (T 'logDiskStart') 'info'
-    Start-EngineTask $script:DiskTaskCode @{ Target = $env:USERPROFILE }
+    $diskTarget = if ($script:TestMode) { $FixtureRoot } else { $env:USERPROFILE }
+    Start-EngineTask $script:DiskTaskCode @{ Target = $diskTarget }
 })
 #endregion
 
 #region 19. Localization apply
 function Apply-Language {
+    $lblDiskEmpty.Text = T 'diskEmpty'
+    $lblTrapTopEmpty.Text = T 'trapEmpty'
+    $lblTrapRecentEmpty.Text = T 'trapEmpty'
+    if ($script:LastScanResult -and $script:LastScanResult.TotalSize -eq 0) {
+        $lblJunkVal.Text = if ($script:LastScanResult.Status -eq 'Failed') { T 'scanFailed' } elseif ($script:LastScanResult.Status -eq 'Partial') { T 'scanIncomplete' } else { T 'cleanState' }
+    }
+    $chkRam.Text = T 'optRam'; $chkDns.Text = T 'optDns'
+    $switchPanel.AccessibleName = T 'autoBoost'
+    $btnClose.AccessibleName = T 'accessibleClose'
+    $btnMin.AccessibleName = T 'accessibleMinimize'
+    $logBox.AccessibleName = T 'accessibleLog'
+    $cmbLimit.AccessibleName = T 'accessibleThreshold'
+    $cmbLang.AccessibleName = T 'language'
+    $lvDisk.AccessibleName = T 'diskTitle'
+    $lvTrapTop.AccessibleName = T 'trapTopTitle'
+    $lvTrapRecent.AccessibleName = T 'trapRecentTitle'
+    $script:UILoading = $true
+    try { $cmbLang.SelectedIndex = if ($script:Settings.language -eq 'en') { 1 } else { 0 } } finally { $script:UILoading = $false }
+
     $btnNavDash.Text = (T 'navDash')
     $btnNavSettings.Text = (T 'navSettings')
     $btnNavDisk.Text = (T 'navDisk')
@@ -2790,7 +2959,7 @@ $timer.add_Tick({
 
         # Auto-boost with cooldown (5 min) + hysteresis (re-arm 5 points below limit)
         $limitVal = [int]$script:Settings.autoBoostLimit
-        if ($script:Settings.autoBoost) {
+        if ($script:Settings.autoBoost -and -not $script:ExitRequested) {
             if ($script:ramLoad -ge $limitVal) {
                 $cooldownOk = ((Get-Date) - $script:LastBoost).TotalSeconds -ge 300
                 if ($script:BoostArmed -and $cooldownOk -and -not $script:Sync.Busy) {
@@ -2821,6 +2990,13 @@ $form.add_FormClosing({
         Hide-ToTray
         return
     }
+    if ($script:Tasks.Count -gt 0) {
+        $e.Cancel = $true
+        if (-not $script:ExitRequested) { Write-Log (T 'logExitPending') 'warn' }
+        $script:ExitRequested = $true
+        $script:ReallyExit = $true
+        return
+    }
     try { $timer.Stop() } catch {}
     try { $pump.Stop() } catch {}
     # Ask running workers to stop asynchronously - a synchronous Stop() here
@@ -2836,6 +3012,7 @@ $form.add_FormClosing({
 
 $form.add_Load({
     Write-Log (T 'logStart') 'info'
+    if (-not $script:SettingsValid -and $settingsDocument.Exists) { Write-Log ('Settings were rejected; safe defaults are active: ' + $script:SettingsError) 'error' }
     if (-not $script:cpuCounter) { Write-Log (T 'logCpuFail') 'warn' }
 
     if ($script:IsAdmin) {
@@ -2861,17 +3038,184 @@ $form.add_Load({
 })
 
 $form.add_Shown({
+    $workingArea = [Windows.Forms.Screen]::FromControl($form).WorkingArea
+    $form.Size = New-Object Drawing.Size([Math]::Min(680,$workingArea.Width),[Math]::Min(590,$workingArea.Height))
+    $form.Location = New-Object Drawing.Point(($workingArea.Left + [Math]::Max(0,[int](($workingArea.Width-$form.Width)/2))),($workingArea.Top + [Math]::Max(0,[int](($workingArea.Height-$form.Height)/2))))
     if ($StartMinimized) {
         $script:BalloonShown = $true
         Hide-ToTray
     }
 })
 
+# Match keyboard traversal to the visual order, including controls added later.
+function Set-VisualTabOrder([Windows.Forms.Control]$Parent) {
+    $index = 0
+    foreach ($control in @($Parent.Controls | Sort-Object Top,Left)) {
+        $control.TabIndex = $index++
+        if ($control.HasChildren) { Set-VisualTabOrder $control }
+    }
+}
+Set-VisualTabOrder $form
+
 Show-View 'dash'
 Apply-Language
 $script:UILoading = $false
 
-[System.Windows.Forms.Application]::Run($form)
+# Visual fixture mode exercises the real renderer without external input.
+if ($ExitDuringWorkerTest) {
+    $script:ExitTestTimer = [Windows.Forms.Timer]::new()
+    $script:ExitTestTimer.Interval = 200
+    $script:ExitTestTimer.add_Tick({
+        if ($script:Sync.Busy -or $script:Tasks.Count) { return }
+        $script:ExitTestTimer.Stop()
+        $probe = @'
+param($Sync,$Opt)
+[IO.File]::WriteAllText($Opt.Path,'begin')
+Start-Sleep -Seconds 3
+[IO.File]::AppendAllText($Opt.Path,';end')
+$Sync.RamResult = @{ Saved = 0; Success = 0; Fail = 0 }
+'@
+        Start-EngineTask $probe @{ Path = (Join-Path $FixtureRoot 'exit-worker.txt') }
+        $script:ReallyExit = $true
+        $form.Close()
+    })
+    $form.add_Shown({ $script:ExitTestTimer.Start() })
+}
+if ($VisualReportDir) {
+    [void][IO.Directory]::CreateDirectory($VisualReportDir)
+    Add-Type -Namespace OpenRelax -Name VisualApi -MemberDefinition '[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);'
+    $script:VisualStep = 0
+    $script:VisualErrors = @()
+    $script:VisualTimer = New-Object System.Windows.Forms.Timer
+    $script:VisualTimer.Interval = 500
+    $script:VisualTimer.add_Tick({
+        try {
+            $index = [int][Math]::Floor($script:VisualStep / 2)
+            if ($index -ge 8) {
+                $script:VisualTimer.Stop()
+                @{ screenshots = 8; errors = @($script:VisualErrors) } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $VisualReportDir 'visual-report.json') -Encoding UTF8
+                $script:ReallyExit = $true
+                $form.Close()
+                return
+            }
+            $language = if ($index -lt 4) { 'tr' } else { 'en' }
+            $view = @('dash','settings','disk','trap')[$index % 4]
+            if (($script:VisualStep % 2) -eq 0) {
+                $script:Settings.language = $language
+                Apply-Language
+                Show-View $view
+            } else {
+                $bmp = New-Object Drawing.Bitmap($form.Width, $form.Height)
+                $graphics = [Drawing.Graphics]::FromImage($bmp)
+                $hdc = $graphics.GetHdc()
+                try { $captured = [OpenRelax.VisualApi]::PrintWindow($form.Handle, $hdc, 0) }
+                finally { $graphics.ReleaseHdc($hdc); $graphics.Dispose() }
+                try {
+                    if (-not $captured) { throw 'PrintWindow failed.' }
+                    $bmp.Save((Join-Path $VisualReportDir ($language + '-' + $view + '.png')), [Drawing.Imaging.ImageFormat]::Png)
+                } finally { $bmp.Dispose() }
+            }
+            $script:VisualStep++
+        } catch {
+            $script:VisualErrors += $_.Exception.Message
+            $script:VisualStep++
+        }
+    })
+    $form.add_Shown({ $script:VisualTimer.Start() })
+}
+if ($UiAcceptanceReportDir) {
+    [void][IO.Directory]::CreateDirectory($UiAcceptanceReportDir)
+    $script:UiProbeTimer = [Windows.Forms.Timer]::new()
+    $script:UiProbeTimer.Interval = 250
+    $script:UiProbeTimer.add_Tick({
+        if ($script:Sync.Busy -or $script:Tasks.Count) { return }
+        $script:UiProbeTimer.Stop()
+        $errors = @(); $checks = @(); $dpi = $null
+        $originalSize = $form.Size; $originalLanguage = $script:Settings.language
+        try {
+            Show-View 'settings'
+            $form.Activate()
+            $expected = @($chkTray,$chkStartup,$chkWeekly,$chkRam,$chkDns,$cmbLang)
+            if ($btnElevate.Enabled -and $btnElevate.Visible) { $expected += $btnElevate }
+            $current = $null
+            foreach ($control in $expected) {
+                $moved = $genCard.SelectNextControl($current,$true,$true,$false,$false)
+                if (-not $moved -or -not $control.Focused) { throw ('Settings focus order failed at: ' + $control.Text) }
+                $current = $control
+            }
+            if ($genCard.SelectNextControl($current,$true,$true,$false,$false)) { throw 'Unexpected additional settings tab stop.' }
+            $checks += 'settings-focus-order'
+            # Exercise WinForms' actual dialog-key preprocessor, rather than
+            # calling SelectNextControl again or injecting global desktop input.
+            $dialogKey = [Windows.Forms.Form].GetMethod('ProcessDialogKey',[Reflection.BindingFlags]'Instance,NonPublic')
+            if (-not $dialogKey) { throw 'Dialog key processor unavailable.' }
+            if (-not $expected[0].Focus()) { throw 'Initial dialog-key focus failed.' }
+            for ($i=1; $i -lt $expected.Count; $i++) {
+                $handled = $dialogKey.Invoke($form,[object[]]@([Windows.Forms.Keys]::Tab))
+                if (-not $handled -or -not $expected[$i].Focused) { throw ('Tab routing failed at: ' + $expected[$i].Text) }
+            }
+            for ($i=$expected.Count-2; $i -ge 0; $i--) {
+                $reverse = [Windows.Forms.Keys]([int][Windows.Forms.Keys]::Shift -bor [int][Windows.Forms.Keys]::Tab)
+                $handled = $dialogKey.Invoke($form,[object[]]@($reverse))
+                if (-not $handled -or -not $expected[$i].Focused) { throw ('Shift+Tab routing failed at: ' + $expected[$i].Text) }
+            }
+            $checks += 'dialog-key-routing'
+            [void]$expected[$expected.Count-1].Focus()
+            $handled = $dialogKey.Invoke($form,[object[]]@([Windows.Forms.Keys]::Tab))
+            if (-not $handled -or -not $btnMin.Focused -or $switchPanel.Focused -or $btnAnalyze.Focused) { throw 'Tab visited a hidden view or failed to wrap.' }
+            $checks += 'hidden-view-tab-skip'
+            $dpi = Get-WindowDpiDiagnostics $form.Handle
+            if ($dpi.WindowAwareness -notin @(0,1,2) -or $dpi.ThreadAwareness -notin @(0,1,2) -or $dpi.WindowDpi -le 0) { throw 'Effective DPI context could not be measured.' }
+            if ($dpi.Initialization.Success -and $dpi.WindowMode -ne 'UnawareGdiScaled') { throw 'Window context differs from the successfully requested DPI mode.' }
+            $checks += 'runtime-dpi-context'
+            foreach ($language in 'tr','en') {
+                $script:Settings.language = $language; Apply-Language
+                foreach ($control in @($btnClose,$btnMin,$cmbLimit,$cmbLang,$logBox,$lvDisk,$lvTrapTop,$lvTrapRecent)) {
+                    $name = [string]$control.AccessibilityObject.Name
+                    if ([string]::IsNullOrWhiteSpace($name) -or $name -ne $control.AccessibleName) { throw 'Accessible name missing or inconsistent.' }
+                }
+            }
+            if ($chkDns.AccessibilityObject.Role.ToString() -ne 'CheckButton') { throw 'DNS option lacks native checkbox accessibility role.' }
+            $priorDns = $chkDns.Checked
+            try {
+                $chkDns.AccessibilityObject.DoDefaultAction()
+                if ($chkDns.Checked -eq $priorDns) { throw 'Native checkbox default action failed.' }
+                $saved = Read-SettingsDocument $script:SettingsFile
+                if (-not $saved.Valid -or $saved.Settings.clearDns -ne $chkDns.Checked) { throw 'Checkbox preference did not persist.' }
+            } finally {
+                if ($chkDns.Checked -ne $priorDns) { $chkDns.AccessibilityObject.DoDefaultAction() }
+            }
+            $checks += 'accessible-names-and-checkbox-action'
+            Show-View 'dash'
+            if (-not $switchPanel.Focus()) { throw 'Dashboard option cannot receive keyboard focus.' }
+            $form.AutoScrollPosition = [Drawing.Point]::Empty
+            $form.Size = [Drawing.Size]::new(540,450)
+            $form.PerformLayout()
+            $form.ScrollControlIntoView($switchPanel)
+            $form.PerformLayout()
+            $bounds = $switchPanel.RectangleToScreen($switchPanel.ClientRectangle)
+            $visible = $bounds; $parent = $switchPanel.Parent
+            while ($parent) {
+                $visible = [Drawing.Rectangle]::Intersect($visible,$parent.RectangleToScreen($parent.ClientRectangle))
+                $parent = $parent.Parent
+            }
+            if (-not $visible.Equals($bounds)) { throw 'Small viewport cannot reveal the dashboard option.' }
+            if (-not $form.HorizontalScroll.Visible -or -not $form.VerticalScroll.Visible) { throw 'Small viewport did not exercise both scrollbars.' }
+            $checks += 'small-viewport-reachability'
+        } catch { $errors += $_.Exception.Message }
+        finally {
+            $script:Settings.language = $originalLanguage; Apply-Language
+            $form.Size = $originalSize; $form.AutoScrollPosition = [Drawing.Point]::Empty
+            @{ passed = ($errors.Count -eq 0 -and $checks.Count -eq 6); checks = @($checks); errors = @($errors); dpi = $dpi; boundary = 'Native control API; no physical keyboard, Narrator speech or monitor DPI transition.' } |
+                ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $UiAcceptanceReportDir 'ui-report.json') -Encoding UTF8
+            $script:ReallyExit = $true; $form.Close()
+        }
+    })
+    $form.add_Shown({ $script:UiProbeTimer.Start() })
+}
+
+try { [System.Windows.Forms.Application]::Run($form) }
+finally { if ($script:OwnGuiMutex) { $script:GuiMutex.ReleaseMutex() }; $script:GuiMutex.Dispose() }
 
 # Guarantee process termination even if a worker runspace thread is still alive
 [Environment]::Exit(0)
