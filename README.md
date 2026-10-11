@@ -3,8 +3,18 @@
 [![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
 
 Portable, MIT-licensed Windows maintenance software written in PowerShell and
-Windows Forms. Source version **2.1 Preview**; the current safety changes are
-unreleased. No signed binary or published LTS support period is provided.
+Windows Forms. Source version **2.1 Preview** is available from this repository.
+No signed binary, stable release or published LTS support period is provided.
+
+## Interface preview
+
+| English | Türkçe |
+| --- | --- |
+| ![OpenRelax English dashboard showing maintenance status and review controls](docs/screenshots/en-dashboard.png) | ![OpenRelax Türkçe panel; bakım durumu ve gözden geçirme denetimleri](docs/screenshots/tr-dashboard.png) |
+
+These are real 680×590 WinForms captures produced by the verified Windows workflow,
+not mock-ups. [Browse all eight TR/EN interface captures](docs/screenshots/README.md)
+and the [exact CI run](https://github.com/mehmeterendereli/openrelax/actions/runs/38117327204).
 
 ## Run from source
 
@@ -126,15 +136,22 @@ refused. `-TestMode` isolates targets/state and disables system integration.
 Test hooks are ignored during normal operation.
 
 GUI/resource stress and CPU-burst tests are optional local checks. Do not run
-CPU-burst tests on a busy production machine. Real SYSTEM installation, Windows
-Update integration, other Windows builds, high DPI and screen-reader behaviour
-need additional release validation; synthetic checks do not establish those.
-`tests\exit-smoke.ps1` also verifies that closing the real test GUI waits for
-its owned worker instead of interrupting it.
+CPU-burst tests on a busy production machine. On a disposable GitHub-hosted
+Windows Server 2025 runner, CI also performs a real Fotokapan install, starts the
+SYSTEM task, checks protected ACLs through a separate standard-user logon (read
+allowed; write/delete denied), upgrades the same reviewed source and uninstalls
+while retaining logs. See the [passing evidence run](https://github.com/mehmeterendereli/openrelax/actions/runs/38117327204).
+This is not validation of real Windows Update restoration, reboot persistence,
+RDP, physical keyboard use, Narrator, monitor-DPI transitions, signing, a stable
+release or LTS support. `tests\exit-smoke.ps1` also verifies that closing the
+real test GUI waits for its owned worker instead of interrupting it.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [CHANGELOG.md](CHANGELOG.md) and the
-ordered [end-to-end plan](PLAN.md).
+ordered [end-to-end plan](PLAN.md). For a reproducible product problem, [open an
+issue](https://github.com/mehmeterendereli/openrelax/issues/new) with the Windows
+version, exact command or page, expected result, actual result and any reviewed,
+non-sensitive log excerpt.
 
 ## Source map
 
