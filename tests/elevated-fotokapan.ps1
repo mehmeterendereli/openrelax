@@ -18,7 +18,13 @@ $InstalledScript = Join-Path $InstallDir 'bin\fotokapan.ps1'
 $InstalledCore = Join-Path $InstallDir 'bin\lib\OpenRelax.Core.ps1'
 $LogsDir = Join-Path $InstallDir 'logs'
 $PowerShellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$ReaderSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$TempUserName = 'OpenRelaxCI' + [Guid]::NewGuid().ToString('N').Substring(0,8)
+$ProbeScript = Join-Path $env:ProgramData ('OpenRelax-AclProbe-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+$PasswordText = [Guid]::NewGuid().ToString('N') + 'aA1!'
+$SecurePassword = ConvertTo-SecureString $PasswordText -AsPlainText -Force
+$Credential = [Management.Automation.PSCredential]::new(("$env:COMPUTERNAME\$TempUserName"),$SecurePassword)
+$CreatedTestUser = $false
+$ReaderSid = $null
 $AdminSid = 'S-1-5-32-544'
 $SystemSid = 'S-1-5-18'
 
@@ -58,6 +64,21 @@ function Invoke-Installer {
     }
     & $PowerShellExe @arguments
     if ($LASTEXITCODE -ne 0) { throw "Fotokapan $Mode exited $LASTEXITCODE." }
+}
+
+function Invoke-ReaderProbe {
+    param(
+        [ValidateSet('Read','Write','Delete')][string]$Mode,
+        [string]$ExpectedSha = ''
+    )
+    $arguments = @(
+        '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+        '-File',$ProbeScript,'-Mode',$Mode,'-Target',$InstalledScript
+    )
+    if ($ExpectedSha) { $arguments += @('-ExpectedSha',$ExpectedSha) }
+    $process = Start-Process -FilePath $PowerShellExe -Credential $Credential -LoadUserProfile `
+        -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden
+    Assert-True ($process.ExitCode -eq 0) "Cross-account $Mode probe exited $($process.ExitCode)."
 }
 
 function Assert-ProtectedAcl {
@@ -106,6 +127,52 @@ Assert-True (-not $preexistingTask) 'Refusing to replace a pre-existing OpenRela
 Assert-True (-not (Test-Path -LiteralPath $InstallDir)) 'Refusing to replace a pre-existing Fotokapan tree.'
 
 try {
+    $testUser = New-LocalUser -Name $TempUserName -Password $SecurePassword `
+        -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword `
+        -Description 'Disposable OpenRelax ACL acceptance identity'
+    $CreatedTestUser = $true
+    $ReaderSid = $testUser.Sid.Value
+    Assert-True ($ReaderSid -match '^S-1-5-21-') 'Disposable reader SID is not a local account SID.'
+    $adminMembers = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop)
+    Assert-True (@($adminMembers | Where-Object { $_.Sid.Value -eq $ReaderSid }).Count -eq 0) 'Disposable reader unexpectedly belongs to Administrators.'
+
+    $probe = @'
+param(
+    [ValidateSet('Read','Write','Delete')][string]$Mode,
+    [string]$Target,
+    [string]$ExpectedSha = ''
+)
+$ErrorActionPreference = 'Stop'
+if ($Mode -eq 'Read') {
+    if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) { exit 20 }
+    if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $ExpectedSha) { exit 21 }
+    exit 0
+}
+if ($Mode -eq 'Write') {
+    try {
+        $stream = [IO.File]::Open($Target,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        $stream.Dispose()
+        exit 31
+    } catch [UnauthorizedAccessException] {
+        exit 0
+    } catch {
+        exit 32
+    }
+}
+if ($Mode -eq 'Delete') {
+    try {
+        [IO.File]::Delete($Target)
+        exit 41
+    } catch [UnauthorizedAccessException] {
+        exit 0
+    } catch {
+        exit 42
+    }
+}
+exit 98
+'@
+    [IO.File]::WriteAllText($ProbeScript,$probe,[Text.UTF8Encoding]::new($false))
+
     Invoke-Installer Install
     $task = Wait-TrapTaskRunning
 
@@ -133,6 +200,15 @@ try {
     Assert-True ((Get-FileHash -LiteralPath $InstalledScript -Algorithm SHA256).Hash -eq $sourceHash) 'Installed Fotokapan source differs from the reviewed source.'
     Assert-True ((Get-FileHash -LiteralPath $InstalledCore -Algorithm SHA256).Hash -eq $coreHash) 'Installed core library differs from the reviewed source.'
 
+    # Prove the granted SID from a separate standard-user logon: it can read
+    # reviewed source, but Windows itself denies write and delete attempts.
+    Invoke-ReaderProbe Read $sourceHash
+    Invoke-ReaderProbe Write
+    Assert-True ((Get-FileHash -LiteralPath $InstalledScript -Algorithm SHA256).Hash -eq $sourceHash) 'Cross-account write probe changed protected source.'
+    Invoke-ReaderProbe Delete
+    Assert-True (Test-Path -LiteralPath $InstalledScript -PathType Leaf) 'Cross-account delete probe removed protected source.'
+    Assert-True ((Get-FileHash -LiteralPath $InstalledScript -Algorithm SHA256).Hash -eq $sourceHash) 'Cross-account delete probe changed protected source.'
+
     # Exercise the real upgrade path: the existing task must be disabled/stopped,
     # sources replaced atomically, and a fresh SYSTEM task started.
     Invoke-Installer Install
@@ -147,7 +223,7 @@ try {
     Assert-True (Test-Path -LiteralPath $marker -PathType Leaf) 'Uninstall did not preserve existing logs.'
     Assert-True (Test-Path -LiteralPath $InstalledScript -PathType Leaf) 'Uninstall unexpectedly deleted the retained diagnostic tree.'
 
-    Write-Host 'Elevated Fotokapan acceptance passed: install, SYSTEM task, protected ACL, upgrade and uninstall.'
+    Write-Host 'Elevated Fotokapan acceptance passed: install, SYSTEM task, protected ACL, standard-user enforcement, upgrade and uninstall.'
 }
 finally {
     $task = Get-TrapTask
@@ -157,5 +233,11 @@ finally {
     }
     if (Test-Path -LiteralPath $InstallDir) {
         Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction Stop
+    }
+    if (Test-Path -LiteralPath $ProbeScript) {
+        Remove-Item -LiteralPath $ProbeScript -Force -ErrorAction Stop
+    }
+    if ($CreatedTestUser -and (Get-LocalUser -Name $TempUserName -ErrorAction SilentlyContinue)) {
+        Remove-LocalUser -Name $TempUserName -ErrorAction Stop
     }
 }

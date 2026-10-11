@@ -208,7 +208,7 @@ jobs:
             testedCommit = $testedCommit
             eventCommit = $env:GITHUB_SHA
             elevatedFotokapan = $env:ACCEPTANCE_OUTCOME
-            boundary = 'Disposable GitHub-hosted Windows runner only. Real Fotokapan install, SYSTEM task registration/start, protected ACL structure, same-source upgrade and uninstall with retained logs. Not Windows Update restoration, cross-account logon/write enforcement, reboot persistence, RDP, physical keyboard, Narrator, monitor-DPI, signing, stable release or LTS certification.'
+            boundary = 'Disposable GitHub-hosted Windows runner only. Real Fotokapan install, SYSTEM task registration/start, protected ACL structure, separate standard-user read plus write/delete denial, same-source upgrade and uninstall with retained logs. Not Windows Update restoration, reboot persistence, RDP, physical keyboard, Narrator, monitor-DPI, signing, stable release or LTS certification.'
           } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $destination 'evidence.json') -Encoding UTF8
       - name: Upload elevated evidence
         if: ${{ !cancelled() }}
