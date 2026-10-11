@@ -2,25 +2,57 @@ name: Windows verification
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Retain the old group so this also cancels superseded pre-change runs.
 concurrency:
   group: openrelax-verify-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  preflight:
+    name: Syntax and test scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      standard: ${{ steps.scope.outputs.standard }}
+      elevated: ${{ steps.scope.outputs.elevated }}
+    steps:
+      - name: Check out source and comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Test conservative change selection
+        run: python3 .github/ci/test_scope.py
+      - name: Select required suites
+        id: scope
+        run: python3 .github/ci/scope.py
+      - name: Parse source and embedded workers without executing Windows code
+        if: steps.scope.outputs.standard == 'true' || steps.scope.outputs.elevated == 'true'
+        shell: pwsh
+        run: ./.github/ci/parse-powershell.ps1
+
   parser-and-self-test:
     name: Parser + safety contracts
+    needs: [preflight, elevated-fotokapan]
+    if: >-
+      ${{ !cancelled() &&
+          needs.preflight.result == 'success' &&
+          needs.preflight.outputs.standard == 'true' &&
+          (needs.elevated-fotokapan.result == 'success' ||
+           needs.elevated-fotokapan.result == 'skipped') &&
+          (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     env:
       OPENRELAX_VISUAL_DIRNAME: openrelax-visual-${{ github.run_id }}-${{ github.run_attempt }}
       OPENRELAX_EVIDENCE_DIRNAME: openrelax-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -57,7 +89,7 @@ jobs:
         run: .\tests\visual-smoke.ps1 -Work (Join-Path $env:RUNNER_TEMP $env:OPENRELAX_VISUAL_DIRNAME)
 
       - name: Collect bounded review evidence and checked source archive
-        if: always()
+        if: ${{ !cancelled() }}
         shell: powershell
         env:
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
@@ -125,11 +157,65 @@ jobs:
           } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $destination 'evidence.json') -Encoding UTF8
 
       - name: Upload named review evidence
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openrelax-windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ env.OPENRELAX_EVIDENCE_DIRNAME }}/
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: false
+
+  elevated-fotokapan:
+    name: SYSTEM install, ACL, upgrade and uninstall
+    needs: preflight
+    if: >-
+      ${{ !cancelled() &&
+          needs.preflight.result == 'success' &&
+          needs.preflight.outputs.elevated == 'true' &&
+          (github.event_name != 'pull_request' ||
+           (!github.event.pull_request.draft &&
+            github.event.pull_request.head.repo.full_name == github.repository)) }}
+    runs-on: windows-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Exercise real elevated Fotokapan lifecycle
+        id: acceptance
+        shell: powershell
+        run: .\tests\elevated-fotokapan.ps1
+      - name: Record bounded elevated evidence
+        if: ${{ !cancelled() }}
+        shell: powershell
+        env:
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $destination = Join-Path $env:RUNNER_TEMP 'openrelax-elevated-evidence'
+          [void][IO.Directory]::CreateDirectory($destination)
+          $testedCommit = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $testedCommit -notmatch '^[a-f0-9]{40}$') {
+            throw 'Cannot identify tested source.'
+          }
+          [ordered]@{
+            schemaVersion = 1
+            repository = $env:GITHUB_REPOSITORY
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+            testedCommit = $testedCommit
+            eventCommit = $env:GITHUB_SHA
+            elevatedFotokapan = $env:ACCEPTANCE_OUTCOME
+            boundary = 'Disposable GitHub-hosted Windows runner only. Real Fotokapan install, SYSTEM task registration/start, protected ACL structure, same-source upgrade and uninstall with retained logs. Not Windows Update restoration, cross-account logon/write enforcement, reboot persistence, RDP, physical keyboard, Narrator, monitor-DPI, signing, stable release or LTS certification.'
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $destination 'evidence.json') -Encoding UTF8
+      - name: Upload elevated evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openrelax-elevated-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openrelax-elevated-evidence/
           if-no-files-found: error
           retention-days: 7
           include-hidden-files: false
