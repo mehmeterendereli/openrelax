@@ -28,9 +28,11 @@ function Assert-True {
 }
 
 function Get-TrapTask {
-    @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop |
+    $tasks = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop |
         Where-Object { $_.TaskName -eq $TaskName } |
-        Select-Object -First 1)[0]
+        Select-Object -First 1)
+    if ($tasks.Count) { return $tasks[0] }
+    return $null
 }
 
 function Wait-TrapTaskRunning {
