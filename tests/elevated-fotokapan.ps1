@@ -60,7 +60,7 @@ function Assert-ProtectedAcl {
     Assert-True (Test-Path -LiteralPath $Path) "Protected path missing: $Path"
     $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
     $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-    Assert-True ($owner -eq $AdminSid) "Unexpected owner on $Path: $owner"
+    Assert-True ($owner -eq $AdminSid) "Unexpected owner on ${Path}: $owner"
     Assert-True $acl.AreAccessRulesProtected "Inherited ACL remains enabled on $Path"
 
     $rules = @($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
