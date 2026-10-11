@@ -51,8 +51,11 @@ function Invoke-Installer {
     param([ValidateSet('Install','Uninstall')][string]$Mode)
     $arguments = @(
         '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
-        '-File',$SourceScript,('-' + $Mode),'-ReaderSid',$ReaderSid
+        '-File',$SourceScript,('-' + $Mode)
     )
+    if ($Mode -eq 'Install') {
+        $arguments += @('-ReaderSid',$ReaderSid)
+    }
     & $PowerShellExe @arguments
     if ($LASTEXITCODE -ne 0) { throw "Fotokapan $Mode exited $LASTEXITCODE." }
 }
