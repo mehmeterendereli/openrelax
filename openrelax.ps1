@@ -1,4 +1,4 @@
-﻿# OpenRelax PC Care v2.1 Preview - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care v2.3.0 - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
 #                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
@@ -17,8 +17,8 @@ param(
 if ($AutoClean -and $SelfTest) { throw 'AutoClean and SelfTest cannot be combined.' }
 if (($VisualReportDir -or $UiAcceptanceReportDir -or $ExitDuringWorkerTest) -and ($AutoClean -or $SelfTest)) { throw 'GUI test reports require GUI mode.' }
 
-$script:AppVersion   = '2.1'
-$script:AppEdition   = 'Preview'
+$script:AppVersion   = '2.3.0'
+$script:AppEdition   = ''   # 'Preview' or similar for pre-release builds
 $script:ScriptPath   = $PSCommandPath
 $script:TestMode = [bool]$TestMode
 if ($TestMode) {
@@ -652,7 +652,7 @@ if ($AutoClean) {
 }
 
 if ($SelfTest) {
-    Write-Host "OpenRelax v$script:AppVersion $script:AppEdition self-test (read-only scan)"
+    Write-Host ("OpenRelax v$script:AppVersion $script:AppEdition".TrimEnd() + " self-test (read-only scan)")
     Write-Host "Admin: $script:IsAdmin | Settings: $script:SettingsFile"
     $scanIssues = @(); $scanPartial = $false
     $grandSize = [long]0; $grandCount = [long]0; $grandLocked = [long]0
@@ -1010,7 +1010,7 @@ $titleBar.Controls.Add($logoDot)
 Set-RoundedRegion $logoDot 8
 
 $titleLabel = New-Object System.Windows.Forms.Label
-$titleLabel.Text = "OpenRelax PC Care v$script:AppVersion $script:AppEdition"
+$titleLabel.Text = "OpenRelax PC Care v$script:AppVersion $script:AppEdition".TrimEnd()
 $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $titleLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
 $titleLabel.Location = New-Object System.Drawing.Point(30, 11)
