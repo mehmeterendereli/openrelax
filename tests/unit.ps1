@@ -85,6 +85,24 @@ Case 'read-only walk accepts the user profile root' {
 if (Test-Path -LiteralPath $link) { [IO.Directory]::Delete($link) }
 #endregion
 
+#region Categories
+. ([scriptblock]::Create((Get-TestFunctionSource @('Get-JunkCategories'))))
+Case 'devcache category exists before recycle' {
+    $keys = @((Get-JunkCategories) | ForEach-Object { $_.Key })
+    Assert-True ($keys -contains 'devcache') 'The devcache category is missing.'
+    Assert-True ($keys[$keys.Count - 1] -eq 'recycle' -and $keys[$keys.Count - 2] -eq 'devcache') ('Unexpected order: ' + ($keys -join ','))
+}
+Case 'devcache paths are user-level, existing and under the 24 h rule' {
+    $dev = @((Get-JunkCategories) | Where-Object { $_.Key -eq 'devcache' })[0]
+    $local = [Environment]::GetFolderPath('LocalApplicationData')
+    foreach ($target in $dev.Paths) {
+        Assert-True (Test-Path -LiteralPath $target.Path) "Missing path listed: $($target.Path)"
+        Assert-True (-not $target.Admin -and $target.MinAgeHours -eq 24 -and $target.ApprovedRoot -eq $target.Path) "Unsafe target: $($target.Path)"
+        Assert-True ($target.Path.StartsWith($local + '\', [StringComparison]::OrdinalIgnoreCase)) "Target outside LocalAppData: $($target.Path)"
+    }
+}
+#endregion
+
 #region Worker sources
 function Get-WorkerSource([string]$Name) {
     $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'),[ref]$null,[ref]$null)

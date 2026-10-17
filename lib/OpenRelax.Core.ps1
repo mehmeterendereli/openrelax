@@ -215,7 +215,7 @@ function Invoke-Maintenance {
     }
     if (-not $Options.ContainsKey('Keys')) { $Options.Keys = @() }
     $result = @{ Bytes = [long]0; Count = [long]0; Skipped = 0; Errors = @(); Status = 'Success'; Ram = $null }
-    $restricted = @('recycle','wu','wer','gpusetup','shader')
+    $restricted = @('recycle','wu','wer','gpusetup','shader','devcache')
     if (-not $Options.Headless -and -not $Options.Confirmed) { throw 'Interactive maintenance requires confirmation.' }
     foreach ($category in (Get-JunkCategories)) {
         if ($Options.Keys -notcontains $category.Key) { continue }

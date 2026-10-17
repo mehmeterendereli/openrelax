@@ -20,7 +20,7 @@ function Format-Bytes {
 function Get-JunkCategories {
     if ($env:OPENRELAX_FIXTURE_ROOT) {
         $cats = @()
-        foreach ($key in 'temp','browser','discord','shader','wer','wu','gpusetup') {
+        foreach ($key in 'temp','browser','discord','shader','wer','wu','gpusetup','devcache') {
             $cats += @{ Key = $key; Paths = @(@{ Path = (Join-Path $env:OPENRELAX_FIXTURE_ROOT $key); Admin = ($key -in @('wer','wu','gpusetup')); MinAgeHours = 24 }) }
         }
         $cats += @{ Key = 'recycle'; Paths = @() }
@@ -129,6 +129,18 @@ function Get-JunkCategories {
         if (Test-Path $c) { $p += @{ Path = $c; Admin = $true } }
     }
     $cats += @{ Key = 'gpusetup'; Paths = $p }
+
+    # Developer package caches (opt-in): npm, pip, NuGet and Yarn re-download on demand
+    $p = @()
+    foreach ($c in @(
+        (Join-Path $env:LOCALAPPDATA 'npm-cache\_cacache'),
+        (Join-Path $env:LOCALAPPDATA 'pip\Cache'),
+        (Join-Path $env:LOCALAPPDATA 'NuGet\v3-cache'),
+        (Join-Path $env:LOCALAPPDATA 'Yarn\Cache')
+    )) {
+        if (Test-Path -LiteralPath $c) { $p += @{ Path = $c; Admin = $false; MinAgeHours = 24 } }
+    }
+    $cats += @{ Key = 'devcache'; Paths = $p }
 
     # Recycle Bin (handled specially via Shell COM / Clear-RecycleBin)
     $cats += @{ Key = 'recycle'; Paths = @() }

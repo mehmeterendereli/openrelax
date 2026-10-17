@@ -42,7 +42,7 @@ function Get-TestFunctionSource {
 function Start-FixtureApp {
     param([string]$Root,[string]$Arguments,[int]$TimeoutSeconds = 45,[hashtable]$Hooks = @{},[switch]$VisibleUi)
     Assert-TestFixture $Root
-    foreach ($directory in 'state','temp','local','profile','trap','temp-data','browser','discord','shader','wer','wu','gpusetup') { [void][IO.Directory]::CreateDirectory((Join-Path $Root $directory)) }
+    foreach ($directory in 'state','temp','local','profile','trap','temp-data','browser','discord','shader','wer','wu','gpusetup','devcache') { [void][IO.Directory]::CreateDirectory((Join-Path $Root $directory)) }
     $app = Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

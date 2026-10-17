@@ -80,6 +80,7 @@ $script:Strings = @{
         warnShader = 'Shader önbelleği yeniden oluşturulur; ilk açılış yavaşlayabilir.'
         warnWer = 'Hata raporları tanılama için gerekebilir.'
         warnWu = 'Windows Update servisleri geçici olarak durdurulur.'
+        warnDevcache = 'Geliştirici paket önbellekleri silinir; paketler bir sonraki kurulumda yeniden indirilir.'
         logMaintenanceResult = 'Bakım: {0} · {1} dosya ({2}) · {3} atlanan · {4} hata'
         logRamResult = 'Net bellek değişimi: {0} (geçici); {1} süreç başarılı, {2} atlandı/hata.'
         navDash          = 'Panel'
@@ -114,6 +115,7 @@ $script:Strings = @{
         cat_wer          = 'Hata Raporları (WER)'
         cat_wu           = 'Windows Update Önbelleği'
         cat_gpusetup     = 'GPU Kurulum Kalıntıları'
+        cat_devcache     = 'Geliştirici Önbellekleri (npm, pip, NuGet, Yarn)'
         cat_recycle      = 'Geri Dönüşüm Kutusu'
         adminRequired    = '(yönetici gerekli)'
         settingsCats     = 'TEMİZLİK KATEGORİLERİ'
@@ -229,6 +231,7 @@ $script:Strings = @{
         warnShader = 'Shader caches rebuild; the next launch may be slower.'
         warnWer = 'Error reports may be needed for diagnostics.'
         warnWu = 'Windows Update services will be stopped temporarily.'
+        warnDevcache = 'Developer package caches are removed; packages are downloaded again on the next install.'
         logMaintenanceResult = 'Maintenance: {0} · {1} files ({2}) · {3} skipped · {4} errors'
         logRamResult = 'Net memory change: {0} (temporary); {1} processes succeeded, {2} skipped/failed.'
         navDash          = 'Dashboard'
@@ -263,6 +266,7 @@ $script:Strings = @{
         cat_wer          = 'Error Reports (WER)'
         cat_wu           = 'Windows Update Cache'
         cat_gpusetup     = 'GPU Installer Leftovers'
+        cat_devcache     = 'Developer Caches (npm, pip, NuGet, Yarn)'
         cat_recycle      = 'Recycle Bin'
         adminRequired    = '(admin required)'
         settingsCats     = 'CLEANUP CATEGORIES'
@@ -1567,7 +1571,7 @@ $script:CategoryChangedHandler = {
     if (-not (Save-Settings)) { $script:Settings.categories[$sender.Tag] = $old; $script:UILoading = $true; try { $sender.Checked = $old } finally { $script:UILoading = $false } }
 }
 
-$catKeys = @('temp', 'browser', 'discord', 'shader', 'wer', 'wu', 'gpusetup', 'recycle')
+$catKeys = @('temp', 'browser', 'discord', 'shader', 'wer', 'wu', 'gpusetup', 'devcache', 'recycle')
 $catY = 38
 foreach ($catKey in $catKeys) {
     $chk = New-Object System.Windows.Forms.CheckBox
@@ -2510,6 +2514,7 @@ $btnOneClick.add_Click({
     if ($selected -contains 'shader') { $message += "`r`n" + (T 'warnShader') }
     if ($selected -contains 'wer') { $message += "`r`n" + (T 'warnWer') }
     if ($selected -contains 'wu') { $message += "`r`n" + (T 'warnWu') }
+    if ($selected -contains 'devcache') { $message += "`r`n" + (T 'warnDevcache') }
     $answer = [Windows.Forms.MessageBox]::Show($form, $message, 'OpenRelax', [Windows.Forms.MessageBoxButtons]::OKCancel, [Windows.Forms.MessageBoxIcon]::Warning, [Windows.Forms.MessageBoxDefaultButton]::Button2)
     if ($answer -ne [Windows.Forms.DialogResult]::OK) { return }
     $script:Sync.Busy = $true

@@ -195,14 +195,14 @@ Case 'interactive confirmation and opt-in RAM/DNS are enforced' {
 }
 Case 'headless maintenance skips interactive-only categories and propagates errors' {
     $script:RemoveCalls = 0
-    function Get-JunkCategories { return , @(@{ Key = 'recycle'; Paths = @() },@{ Key = 'wu'; Paths = @() },@{ Key = 'temp'; Paths = @() }) }
+    function Get-JunkCategories { return , @(@{ Key = 'recycle'; Paths = @() },@{ Key = 'wu'; Paths = @() },@{ Key = 'devcache'; Paths = @() },@{ Key = 'temp'; Paths = @() }) }
     function Clear-RecycleBin { throw 'Unexpected recycle operation.' }
     function Invoke-WindowsUpdateCacheCleanup { throw 'Unexpected service operation.' }
     function Remove-JunkPaths { param($Paths,[bool]$IsAdmin) $script:RemoveCalls++; throw 'simulated file error' }
     $script:RemoveCalls = 0
-    $result = Invoke-Maintenance @{ Keys = @('recycle','wu','temp'); Headless = $true }
-    Assert-True ($script:RemoveCalls -eq 1 -and $result.Errors[0] -match 'simulated file error') 'Maintenance failed for an unrelated reason.'
-    Assert-True ($result.Status -eq 'Failed' -and $result.Skipped -eq 2 -and $result.Errors.Count -eq 1) 'Headless failure hidden.'
+    $result = Invoke-Maintenance @{ Keys = @('recycle','wu','devcache','temp'); Headless = $true }
+    Assert-True ($script:RemoveCalls -eq 1 -and $result.Errors[0] -match 'simulated file error') 'Maintenance failed for an unrelated reason or cleaned developer caches headless.'
+    Assert-True ($result.Status -eq 'Failed' -and $result.Skipped -eq 3 -and $result.Errors.Count -eq 1) 'Headless failure hidden.'
 }
 Case 'Windows Update restores states and refuses stop/restart failures' {
     foreach ($scenario in 'normal','stopped','stop-first','stop-second','delete','restart','non-admin','paused','pending','stop-noop','stop-after-change','restart-noop') {
