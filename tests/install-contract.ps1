@@ -13,8 +13,9 @@ $Work = $workspace.Path
 $script:Cases = [Collections.Generic.List[object]]::new()
 function Assert-True([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
 function Case([string]$Name,[scriptblock]$Action) {
-    try { & $Action; $script:Cases.Add(@{ name = $Name; passed = $true }); Write-Host "PASS $Name" }
-    catch { $script:Cases.Add(@{ name = $Name; passed = $false; error = $_.Exception.Message }); Write-Host "FAIL $Name`: $($_.Exception.Message)" }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    try { & $Action; $script:Cases.Add(@{ name = $Name; passed = $true }); Write-Host ('PASS {0} ({1:N1} s)' -f $Name, $clock.Elapsed.TotalSeconds) }
+    catch { $script:Cases.Add(@{ name = $Name; passed = $false; error = $_.Exception.Message }); Write-Host ('FAIL {0} ({1:N1} s): {2}' -f $Name, $clock.Elapsed.TotalSeconds, $_.Exception.Message) }
 }
 function New-Sums([string]$Zip) {
     $sums = Join-Path (Split-Path -Parent $Zip) 'SHA256SUMS'
@@ -25,7 +26,10 @@ function New-Sums([string]$Zip) {
 function Invoke-Installer([string]$Zip, [string]$Sums, [string]$Destination) {
     $arguments = '-File "' + (Join-Path $repo 'install.ps1') + '" -ZipPath "' + $Zip + '" -ShaPath "' + $Sums + '" -Destination "' + $Destination + '" -NoShortcut -NoStartup'
     $p = Start-OwnedTestProcess $Work $arguments
-    if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'Installer timed out.' }
+    if (-not $p.WaitForExit(90000)) {
+        $p.Kill(); [void]$p.WaitForExit(10000)
+        throw ('Installer timed out after 90 s. Output so far: ' + $p.TestStdout.Result + ' ' + $p.TestStderr.Result)
+    }
     $result = @{ ExitCode = $p.ExitCode; Stdout = $p.TestStdout.Result; Stderr = $p.TestStderr.Result }
     $p.Dispose()
     return $result
@@ -54,21 +58,30 @@ Case 'replacing an install removes a junction inside it without entering it' {
     Assert-True ($first.ExitCode -eq 0) ('First install failed: ' + $first.Stderr)
     $outside = Join-Path $Work 'outside-sentinel'; [void][IO.Directory]::CreateDirectory($outside)
     [IO.File]::WriteAllText((Join-Path $outside 'keep.txt'),'keep')
-    New-Item -ItemType Junction -Path (Join-Path $dest 'escape') -Target $outside | Out-Null
-    $r = Invoke-Installer $good $goodSums $dest
-    Assert-True ($r.ExitCode -eq 0) ('Reinstall failed: ' + $r.Stderr)
-    Assert-True ([IO.File]::ReadAllText((Join-Path $outside 'keep.txt')) -eq 'keep') 'The junction target was deleted.'
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dest 'escape'))) 'The junction was left in the new install.'
+    $escape = Join-Path $dest 'escape'
+    New-Item -ItemType Junction -Path $escape -Target $outside | Out-Null
+    try {
+        $r = Invoke-Installer $good $goodSums $dest
+        Assert-True ($r.ExitCode -eq 0) ('Reinstall failed: ' + $r.Stderr)
+        Assert-True ([IO.File]::ReadAllText((Join-Path $outside 'keep.txt')) -eq 'keep') 'The junction target was deleted.'
+        Assert-True (-not (Test-Path -LiteralPath $escape)) 'The junction was left in the new install.'
+    } finally {
+        # A failed case must not leave a link that blocks workspace cleanup.
+        if ([IO.Directory]::Exists($escape)) { [IO.Directory]::Delete($escape) }
+    }
 }
 Case 'a destination that is a link is refused without touching its target' {
     $target = Join-Path $Work 'link-target'; [void][IO.Directory]::CreateDirectory($target)
     [IO.File]::WriteAllText((Join-Path $target '.openrelax-install'),'pretend'); [IO.File]::WriteAllText((Join-Path $target 'keep.txt'),'keep')
     $dest = Join-Path $Work 'dest-link'
     New-Item -ItemType Junction -Path $dest -Target $target | Out-Null
-    $r = Invoke-Installer $good $goodSums $dest
-    Assert-True ($r.ExitCode -ne 0) 'A junction destination was accepted.'
-    Assert-True ([IO.File]::ReadAllText((Join-Path $target 'keep.txt')) -eq 'keep' -and -not (Test-Path -LiteralPath (Join-Path $target 'openrelax.ps1'))) 'The junction target was changed.'
-    [IO.Directory]::Delete($dest)
+    try {
+        $r = Invoke-Installer $good $goodSums $dest
+        Assert-True ($r.ExitCode -ne 0) 'A junction destination was accepted.'
+        Assert-True ([IO.File]::ReadAllText((Join-Path $target 'keep.txt')) -eq 'keep' -and -not (Test-Path -LiteralPath (Join-Path $target 'openrelax.ps1'))) 'The junction target was changed.'
+    } finally {
+        if ([IO.Directory]::Exists($dest)) { [IO.Directory]::Delete($dest) }
+    }
 }
 Case 'a tampered zip is refused before anything is extracted' {
     $bad = Join-Path $Work 'tampered\OpenRelax-9.9.9.zip'
@@ -87,7 +100,10 @@ Case 'a zip without the application is refused' {
     [IO.File]::WriteAllText((Join-Path $src 'launch.bat'),'rem')
     $partial = Join-Path $Work 'partial\OpenRelax-9.9.9.zip'
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $partial))
-    Compress-Archive -Path $src -DestinationPath $partial
+    # .NET directly: Compress-Archive autoloads a module, and with the empty module
+    # analysis cache verify gives this child that can scan every installed module.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory($src, $partial, [IO.Compression.CompressionLevel]::Optimal, $true)
     $dest = Join-Path $Work 'dest-partial'
     $r = Invoke-Installer $partial (New-Sums $partial) $dest
     Assert-True ($r.ExitCode -ne 0 -and -not (Test-Path -LiteralPath $dest)) 'An incomplete zip was installed.'
