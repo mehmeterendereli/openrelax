@@ -5,7 +5,7 @@
     "license": "MIT",
     "notes": "Settings and records are kept in %APPDATA%\\OpenRelax and survive updates.",
     "url": "https://github.com/mehmeterendereli/openrelax/releases/download/v2.4.0/OpenRelax-2.4.0.zip",
-    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "9237f6850e2228f417383f4bdc6dde30fcbfa6793f0c5f1ca32e3c326142c2c4",
     "extract_dir": "OpenRelax-2.4.0",
     "shortcuts": [
         [
