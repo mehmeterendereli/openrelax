@@ -177,13 +177,14 @@ if ($Install -or $Uninstall) {
         [void][IO.Directory]::CreateDirectory($directory)
         Set-ProtectedTrapAcl $directory $readerSid
     }
-    # Upgrading a 2.2.x install: its records sit in the trap root. Move them
-    # into logs\ before the whole tree is (re)protected below.
-    Move-LegacyTrapLogs -InstallDir $InstallDir -LogsDir $logs
     $walk = @{ Partial = $false; Skipped = 0; ErrorCount = 0; Errors = @() }
     $logEntries = @(Get-SafeTreeEntries -Path $InstallDir -State $walk)
     if ($walk.Skipped -or $walk.ErrorCount) { throw 'Existing task tree is unsafe or unreadable; installation stopped.' }
     foreach ($entry in $logEntries) { Set-ProtectedTrapAcl $entry.FullName $readerSid (-not $entry.PSIsContainer) }
+    # Upgrading a 2.2.x install: its records sit in the trap root. They are moved
+    # into logs\ only now, after every file was protected and checked for links;
+    # a merged file keeps the protected ACL of the logs\ file it replaces.
+    Move-LegacyTrapLogs -InstallDir $InstallDir -LogsDir $logs
     $installedScript = Join-Path $bin 'fotokapan.ps1'
     $installedCore = Join-Path $library 'OpenRelax.Core.ps1'
     $sourceCore = Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1'
@@ -258,8 +259,11 @@ function Protect-CommandLine([string]$Cmd, [int]$Max = 300) {
     # Arguments are kept only when the user opted in. Pattern matching cannot
     # guarantee that arbitrary secrets are removed, which the setting says.
     if (-not $script:RecordCommandLines -or -not $Cmd) { return '' }
-    $c = $Cmd -replace '(?i)((?:token|api[_-]?key|secret|password|passwd|pwd|auth\w*|bearer)\S*?[=:\s]+)("[^"]*"|''[^'']*''|\S+)', '$1***'
-    $c = $c -replace '(?i)(://[^:/\s]+:)[^@\s]+@', '$1***@'
+    # key=value / --key value / "Authorization: Bearer x" forms, URL user info,
+    # query parameters (each up to the next &) and curl-style -u user:password.
+    $c = $Cmd -replace '(?i)(://[^:/\s]+:)[^@\s]+@', '$1***@'
+    $c = $c -replace '(?i)(\s(?:-u|--user)\s+[^:\s]+:)\S+', '$1***'
+    $c = $c -replace '(?i)((?:token|api[_-]?key|key|secret|password|passwd|pwd|auth\w*|bearer|sig|signature|cookie|session|credential\w*)\S*?[=:\s]+)((?:bearer|basic|token)\s+)?("[^"]*"|''[^'']*''|[^\s&"]+)', '$1$2***'
     if ($c.Length -gt $Max) { $c = $c.Substring(0, $Max) + '...' }
     return $c
 }

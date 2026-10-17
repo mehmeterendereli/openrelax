@@ -131,6 +131,10 @@ Case 'opted-in command lines are masked and bounded' {
         Assert-True ($masked -notmatch 'FAKE_TOKEN|FAKE_KEY|FAKE SECRET') "Secret retained: $masked"
         Assert-True ($masked -match '--keep me') "Ordinary argument lost: $masked"
         Assert-True ((Protect-CommandLine ('x' * 500)).Length -le 303) 'Command line was not truncated.'
+        foreach ($input in @('curl -H "Authorization: Bearer FAKE_BEARER" https://example.invalid','curl -u demo:FAKE_PASSWORD https://example.invalid','tool https://demo:FAKE_PASSWORD@example.invalid/?key=FAKE_KEY&sig=FAKE_SIG','app --session-cookie=FAKE_COOKIE')) {
+            $masked = Protect-CommandLine $input
+            Assert-True ($masked -notmatch 'FAKE_') "Secret retained: $masked"
+        }
     } finally { $script:RecordCommandLines = $false }
 }
 Case 'command arguments cannot leak through supported or positional formats' {
