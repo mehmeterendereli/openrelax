@@ -17,7 +17,9 @@ $engineNames = @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPa
 
 Case 'safe defaults and strict settings types' {
     $defaults = Get-DefaultSettings
-    foreach ($key in 'recycle','wu','shader','wer','gpusetup') { Assert-True (-not $defaults.categories[$key]) "Unsafe default: $key" }
+    foreach ($key in 'recycle','wu','shader','wer','gpusetup','devcache') { Assert-True (-not $defaults.categories[$key]) "Unsafe default: $key" }
+    Assert-True (-not $defaults.trapRecordCommandLines) 'Command-line recording is on by default.'
+    Assert-True ($defaults.trapNotify -eq $true) 'Spike notifications are off by default.'
     $path = Join-Path $Work 'settings.json'
     Write-SettingsAtomic $defaults $path
     Assert-True (Read-SettingsDocument $path).Valid 'Valid settings rejected.'
@@ -32,10 +34,23 @@ Case 'safe defaults and strict settings types' {
     $defaults = Get-DefaultSettings; $defaults.language = @('tr'); Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) 'Language array accepted.'
     $legacy = Get-DefaultSettings; $legacy.Remove('schemaVersion'); $legacy.Remove('trimRam'); $legacy.Remove('clearDns'); Write-SettingsAtomic $legacy $path
     $loaded = Read-SettingsDocument $path; Assert-True ($loaded.Valid -and -not $loaded.Settings.trimRam -and -not $loaded.Settings.clearDns) 'Legacy migration changed opt-in defaults.'
+    $defaults = Get-DefaultSettings; $defaults.categories.devcache = 'false'; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) 'String devcache accepted.'
+    foreach ($key in 'trapNotify','trapRecordCommandLines') { $defaults = Get-DefaultSettings; $defaults[$key] = 1; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) "Non-boolean $key accepted." }
     $defaults = Get-DefaultSettings; $defaults.categories.Remove('recycle')
     Write-SettingsAtomic $defaults $path
     Assert-True (-not (Read-SettingsDocument $path).Valid) 'Missing category accepted.'
     Assert-True (-not (Read-SettingsDocument (Join-Path $Work 'missing.json')).Valid) 'Missing settings accepted.'
+}
+Case 'a 2.2.1 settings file migrates with preferences and statistics' {
+    $path = Join-Path $Work 'settings-221.json'
+    $legacy = '{"weeklyClean":false,"categories":{"temp":true,"wer":true,"shader":true,"browser":true,"recycle":true,"gpusetup":true,"discord":true,"wu":false,"devcache":false},"autoBoostLimit":80,"closeToTray":true,"trapNotify":true,"stats":{"totalCleanedBytes":9421688750,"totalRuns":14,"lastClean":"2026-10-16 21:18"},"language":"tr","runAtStartup":true,"autoBoost":true}'
+    [IO.File]::WriteAllText($path,$legacy,[Text.UTF8Encoding]::new($false))
+    $loaded = Read-SettingsDocument $path
+    Assert-True $loaded.Valid ('2.2.1 settings rejected: ' + $loaded.Error)
+    Assert-True ($loaded.Settings.autoBoostLimit -eq 80 -and $loaded.Settings.autoBoost -and $loaded.Settings.runAtStartup) 'Preferences were lost.'
+    Assert-True ($loaded.Settings.stats.totalCleanedBytes -eq 9421688750 -and $loaded.Settings.stats.totalRuns -eq 14) 'Statistics were lost.'
+    Assert-True ($loaded.Settings.categories.recycle -eq $true -and $loaded.Settings.categories.devcache -eq $false) 'Category choices were changed.'
+    Assert-True ($loaded.Settings.trapNotify -eq $true -and $loaded.Settings.trapRecordCommandLines -eq $false) 'Fotokapan preferences were changed.'
 }
 Case 'atomic save preserves the old file after replace failure' {
     $path = Join-Path $Work 'atomic.json'
