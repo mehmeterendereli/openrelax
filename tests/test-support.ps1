@@ -25,6 +25,20 @@ function Remove-TestWorkspace {
     [IO.Directory]::Delete($Workspace.Path,$true)
 }
 
+# Each child gets its own module analysis cache, so tests never write the
+# user's. An empty cache makes Windows PowerShell scan every installed module
+# on its first command lookup - about 20 s per child on GitHub's Windows image -
+# so the owned cache starts as a copy of this machine's.
+function Initialize-ModuleCache([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $default = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\PowerShell\ModuleAnalysisCache'
+        if (Test-Path -LiteralPath $default -PathType Leaf) {
+            try { [IO.File]::Copy($default, $Path) } catch {}
+        }
+    }
+    return $Path
+}
+
 function Get-TestFunctionSource {
     param([string[]]$Names)
     $repo = Split-Path -Parent $PSScriptRoot
@@ -53,6 +67,7 @@ function Start-FixtureApp {
     foreach ($key in @($info.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $info.EnvironmentVariables.Remove($key) } }
     # Explicit TestMode routes app state/targets to fixtures. Keep known-folder
     # identities accurate so protected-path checks remain meaningful.
+    [void](Initialize-ModuleCache (Join-Path $Root 'module-cache'))
     foreach ($pair in @(@('TEMP','temp'),@('TMP','temp'),@('OPENRELAX_TRAP_DIR','trap'),@('PSModuleAnalysisCachePath','module-cache'))) { $info.EnvironmentVariables[$pair[0]] = Join-Path $Root $pair[1] }
     foreach ($key in $Hooks.Keys) {
         if ($key -notin @('OPENRELAX_STRESS','OPENRELAX_STRESS_REPORT','OPENRELAX_SMOKETEST')) { throw 'Unsupported fixture hook.' }
@@ -87,6 +102,7 @@ function Start-FixtureAppAsync {
     $info.UseShellExecute = $false; $info.CreateNoWindow = $true; $info.WindowStyle = 'Hidden'
     $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
     foreach ($key in @($info.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $info.EnvironmentVariables.Remove($key) } }
+    [void](Initialize-ModuleCache (Join-Path $Root 'module-cache'))
     foreach ($pair in @(@('TEMP','temp'),@('TMP','temp'),@('OPENRELAX_TRAP_DIR','trap'),@('PSModuleAnalysisCachePath','module-cache'))) { $info.EnvironmentVariables[$pair[0]] = Join-Path $Root $pair[1] }
     foreach ($key in $Hooks.Keys) {
         if ($key -notin @('OPENRELAX_SMOKETEST')) { throw 'Unsupported fixture hook.' }
@@ -110,7 +126,7 @@ function Start-OwnedTestProcess {
     $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
     foreach ($key in @($info.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $info.EnvironmentVariables.Remove($key) } }
     $info.EnvironmentVariables['TEMP'] = $temp; $info.EnvironmentVariables['TMP'] = $temp
-    $info.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Root 'module-cache'
+    $info.EnvironmentVariables['PSModuleAnalysisCachePath'] = Initialize-ModuleCache (Join-Path $Root 'module-cache')
     $process = [Diagnostics.Process]::new(); $process.StartInfo = $info
     [void]$process.Start()
     Add-Member -InputObject $process -MemberType NoteProperty -Name TestStdout -Value ($process.StandardOutput.ReadToEndAsync())

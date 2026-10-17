@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.0 — unreleased
+## 2.4.0 — 2026-10-18
 
 Fotokapan now runs inside OpenRelax. Design: `docs/superpowers/specs/2026-10-17-openrelax-ai-growth-design.md`; plan: `docs/superpowers/plans/2026-10-17-openrelax-2.4.md`.
 
