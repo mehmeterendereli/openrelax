@@ -1,10 +1,11 @@
 ﻿# Pure settings, path guards and shared maintenance orchestration. Windows PowerShell 5.1.
 function Get-DefaultSettings {
     return @{
-        schemaVersion = 2; language = 'tr'; autoBoost = $false; autoBoostLimit = 85
+        schemaVersion = 3; language = 'tr'; autoBoost = $false; autoBoostLimit = 85
         closeToTray = $true; runAtStartup = $false; weeklyClean = $false
         trimRam = $false; clearDns = $false
-        categories = @{ temp = $true; browser = $true; discord = $true; shader = $false; wer = $false; wu = $false; gpusetup = $false; recycle = $false }
+        trapNotify = $true; trapRecordCommandLines = $false
+        categories = @{ temp = $true; browser = $true; discord = $true; shader = $false; wer = $false; wu = $false; gpusetup = $false; devcache = $false; recycle = $false }
         stats = @{ totalCleanedBytes = [long]0; totalRuns = 0; lastClean = '' }
     }
 }
@@ -26,18 +27,22 @@ function Read-SettingsDocument {
         if ($document.autoBoostLimit -notin @(70,75,80,85,90)) { throw 'Invalid RAM threshold.' }
         $result.Settings.language = $document.language
         $result.Settings.autoBoostLimit = [int]$document.autoBoostLimit
+        # Categories added after schema 2 may be absent from older files; they keep their safe default.
+        $optionalCategories = @('devcache')
+        if ($null -eq $document.categories -or $document.categories -is [array] -or $document.categories -is [string]) { throw 'Invalid categories.' }
         foreach ($key in @($result.Settings.categories.Keys)) {
+            if ($key -in $optionalCategories -and -not $document.categories.PSObject.Properties[$key]) { continue }
             if ($document.categories.$key -isnot [bool]) { throw "Invalid category: $key" }
             $result.Settings.categories[$key] = $document.categories.$key
         }
-        foreach ($key in 'trimRam','clearDns') {
+        foreach ($key in 'trimRam','clearDns','trapNotify','trapRecordCommandLines') {
             if ($document.PSObject.Properties[$key]) {
                 if ($document.$key -isnot [bool]) { throw "Invalid boolean: $key" }
                 $result.Settings[$key] = $document.$key
             }
         }
         if ($document.PSObject.Properties['schemaVersion']) {
-            if (($document.schemaVersion -isnot [int] -and $document.schemaVersion -isnot [long]) -or $document.schemaVersion -notin @(1,2)) { throw 'Unsupported settings schema.' }
+            if (($document.schemaVersion -isnot [int] -and $document.schemaVersion -isnot [long]) -or $document.schemaVersion -notin @(1,2,3)) { throw 'Unsupported settings schema.' }
         }
         foreach ($key in 'totalCleanedBytes','totalRuns') {
             $value = $document.stats.$key
@@ -210,7 +215,7 @@ function Invoke-Maintenance {
     }
     if (-not $Options.ContainsKey('Keys')) { $Options.Keys = @() }
     $result = @{ Bytes = [long]0; Count = [long]0; Skipped = 0; Errors = @(); Status = 'Success'; Ram = $null }
-    $restricted = @('recycle','wu','wer','gpusetup','shader')
+    $restricted = @('recycle','wu','wer','gpusetup','shader','devcache')
     if (-not $Options.Headless -and -not $Options.Confirmed) { throw 'Interactive maintenance requires confirmation.' }
     foreach ($category in (Get-JunkCategories)) {
         if ($Options.Keys -notcontains $category.Key) { continue }

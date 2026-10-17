@@ -26,21 +26,23 @@ try {
         $workers[$name] = $literal.Value
     }
     Write-Host "Parser OK: $($sources.Count) source/test files and 4 workers."
-    # A bounded child runs pure contracts and small owned synthetic file fixtures.
-    $contractInfo = [Diagnostics.ProcessStartInfo]::new()
-    $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'safety-contracts.ps1') + '" -Work "' + (Join-Path $Work 'contracts') + '" -KeepArtifacts'
-    $contractInfo.UseShellExecute = $false; $contractInfo.CreateNoWindow = $true; $contractInfo.RedirectStandardOutput = $true; $contractInfo.RedirectStandardError = $true
-    foreach ($key in @($contractInfo.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $contractInfo.EnvironmentVariables.Remove($key) } }
-    $childTemp = Join-Path $Work 'contract-temp'; [void][IO.Directory]::CreateDirectory($childTemp)
-    $contractInfo.EnvironmentVariables['TEMP'] = $childTemp; $contractInfo.EnvironmentVariables['TMP'] = $childTemp
-    $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work 'contract-module-cache'
-    $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
-    [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
-    if (-not $child.WaitForExit(60000)) { $child.Kill(); $child.WaitForExit(); throw 'Owned contract child timed out.' }
-    $code = $child.ExitCode; $text = $out.Result; $errorText = $err.Result; $child.Dispose()
-    Write-Host $text.TrimEnd()
-    Assert ($code -eq 0 -and -not $errorText -and $text -match '0 failed') ('Safety contracts failed: ' + $errorText)
+    # Bounded children run pure contracts/unit cases and small owned synthetic file fixtures.
+    foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts'),@('unit.ps1','unit','Unit tests'))) {
+        $contractInfo = [Diagnostics.ProcessStartInfo]::new()
+        $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot $suite[0]) + '" -Work "' + (Join-Path $Work $suite[1]) + '" -KeepArtifacts'
+        $contractInfo.UseShellExecute = $false; $contractInfo.CreateNoWindow = $true; $contractInfo.RedirectStandardOutput = $true; $contractInfo.RedirectStandardError = $true
+        foreach ($key in @($contractInfo.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $contractInfo.EnvironmentVariables.Remove($key) } }
+        $childTemp = Join-Path $Work ($suite[1] + '-temp'); [void][IO.Directory]::CreateDirectory($childTemp)
+        $contractInfo.EnvironmentVariables['TEMP'] = $childTemp; $contractInfo.EnvironmentVariables['TMP'] = $childTemp
+        $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work ($suite[1] + '-module-cache')
+        $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
+        [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
+        if (-not $child.WaitForExit(120000)) { $child.Kill(); $child.WaitForExit(); throw ('Owned child timed out: ' + $suite[2]) }
+        $code = $child.ExitCode; $text = $out.Result; $errorText = $err.Result; $child.Dispose()
+        Write-Host $text.TrimEnd()
+        Assert ($code -eq 0 -and -not $errorText -and $text -match ' 0 failed') ($suite[2] + ' failed: ' + $errorText)
+    }
     $fixture = New-TestWorkspace (Join-Path $Work 'app')
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture.Path 'state'))
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture.Path 'temp'))
@@ -86,7 +88,7 @@ try {
     $scanWorker = [powershell]::Create()
     try {
         $env:OPENRELAX_FIXTURE_ROOT = $scanFixture.Path
-        $source = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Get-JunkCategories','Get-RecycleBinInfo','Measure-JunkPaths')
+        $source = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Get-JunkCategories','Get-RecycleBinInfo','Measure-JunkPaths')
         [void]$scanWorker.AddScript('Set-StrictMode -Version 2' + "`n" + $source)
         [void]$scanWorker.AddStatement().AddScript($workers.ScanTaskCode).AddArgument($scanSync).AddArgument(@{ IsAdmin = $false })
         $handle = $scanWorker.BeginInvoke()
@@ -106,7 +108,7 @@ try {
     $sync = [hashtable]::Synchronized(@{ Beat = [DateTime]::UtcNow; DiskResult = $null; DiskProgress = $null })
     $ps = [powershell]::Create()
     try {
-        $engine = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Get-SafeTreeEntries')
+        $engine = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Invoke-JunkWalk')
         [void]$ps.AddScript('Set-StrictMode -Version 2' + "`n" + $engine)
         [void]$ps.AddStatement().AddScript($workers.DiskTaskCode).AddArgument($sync).AddArgument(@{ Target = $disk.Path })
         $handle = $ps.BeginInvoke()
@@ -114,7 +116,9 @@ try {
         [void]$ps.EndInvoke($handle)
         Assert (-not $ps.HadErrors) ('Disk worker errors: ' + ($ps.Streams.Error -join '; '))
         $result = $sync.DiskResult
-        Assert ($result.Status -eq 'Partial' -and $result.Count -eq 1 -and $result.Rows.Count -eq 1 -and $result.Rows[0].Name -eq 'good' -and $result.Rows[0].Size -eq 123 -and $result.Skipped -eq 1) 'Disk worker followed a junction or misreported its result.'
+        # The fixture marker file sits at the root, so it has the root-files row.
+        $goodRow = @($result.Rows | Where-Object { $_.Name -eq 'good' }); $rootRow = @($result.Rows | Where-Object { $_.RootFiles })
+        Assert ($result.Status -eq 'Partial' -and $result.Count -eq 2 -and $result.Rows.Count -eq 2 -and $goodRow.Count -eq 1 -and $goodRow[0].Size -eq 123 -and $rootRow.Count -eq 1 -and @($result.Rows | Where-Object { $_.Name -eq 'escape' }).Count -eq 0 -and $result.Skipped -eq 1) 'Disk worker followed a junction or misreported its result.'
         Assert ((Get-Item -LiteralPath $sentinel).Length -eq 9000) 'Disk analysis changed the outside sentinel.'
     } finally { $ps.Dispose(); [IO.Directory]::Delete($link) }
     # Explicit fixture state redirection must reject an ancestor junction.

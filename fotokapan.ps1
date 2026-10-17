@@ -34,18 +34,23 @@ param(
     [switch]$Install,
     [switch]$Uninstall,
     [switch]$DefenderTrace,
+    [switch]$RecordCommandLines,
     [string]$ReaderSid
 )
 
 $ErrorActionPreference = 'Stop'
 if ($Install -and $Uninstall) { throw 'Install and Uninstall cannot be combined.' }
-$FotokapanVersion = '2.1'
+if ($Uninstall -and $RecordCommandLines) { throw 'RecordCommandLines is not valid with Uninstall.' }
+$FotokapanVersion = '2.3'
 $TaskName   = 'OpenRelax Fotokapan'
 $InstallDir = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
 
 # Shared path guards contain no startup actions.
 . (Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1')
 $script:RecordDefenderTrace = [bool]$DefenderTrace
+# Opt-in (OpenRelax setting, passed at install): masked command lines tell which
+# script a python.exe or node.exe was running. Off, no argument is ever kept.
+$script:RecordCommandLines = [bool]$RecordCommandLines
 
 function Resolve-TrapReaderSid([string]$RequestedSid) {
     if (-not $RequestedSid) { return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
@@ -140,6 +145,41 @@ function Install-ProtectedTrapFile {
     Set-ProtectedTrapAcl $Destination $ReaderSid $true
 }
 
+# 2.2.x kept its records, log and heartbeat next to its script in the trap
+# root; 2.3 reads them from logs\. Moves them there (a month present in both
+# keeps the older root lines first), drops a stale root heartbeat and the old
+# root script. Links are refused, like everywhere else in the task tree.
+function Move-LegacyTrapLogs {
+    param([string]$InstallDir, [string]$LogsDir)
+    Assert-NoReparseAncestors $LogsDir
+    $legacy = @(Get-ChildItem -LiteralPath $InstallDir -File -Force -ErrorAction Stop | Where-Object {
+        $_.Name -like 'spikes-*.jsonl' -or $_.Name -like 'fotokapan-*.log' -or $_.Name -eq 'durum.json' -or $_.Name -eq 'fotokapan.ps1' })
+    foreach ($file in $legacy) {
+        if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A legacy trap file is a link; migration stopped.' }
+        Assert-SingleLinkFile $file.FullName
+        $target = Join-Path $LogsDir $file.Name
+        if ($file.Name -eq 'fotokapan.ps1' -or ($file.Name -eq 'durum.json' -and (Test-Path -LiteralPath $target))) {
+            [IO.File]::Delete($file.FullName); continue
+        }
+        if (-not (Test-Path -LiteralPath $target)) { [IO.File]::Move($file.FullName, $target); continue }
+        Assert-SingleLinkFile $target
+        $older = [IO.File]::ReadAllBytes($file.FullName)
+        $newer = [IO.File]::ReadAllBytes($target)
+        $skip = 0
+        if ($newer.Length -ge 3 -and $newer[0] -eq 0xEF -and $newer[1] -eq 0xBB -and $newer[2] -eq 0xBF) { $skip = 3 }
+        $staging = Join-Path $LogsDir ('merge-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        $out = [IO.File]::Open($staging, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $out.Write($older, 0, $older.Length)
+            if ($older.Length -and $older[$older.Length - 1] -ne 10) { $out.WriteByte(10) }
+            $out.Write($newer, $skip, $newer.Length - $skip)
+            $out.Flush($true)
+        } finally { $out.Dispose() }
+        [IO.File]::Replace($staging, $target, [NullString]::Value)
+        [IO.File]::Delete($file.FullName)
+    }
+}
+
 #region Install / uninstall
 if ($Install -or $Uninstall) {
     $me = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -176,6 +216,11 @@ if ($Install -or $Uninstall) {
     $logEntries = @(Get-SafeTreeEntries -Path $InstallDir -State $walk)
     if ($walk.Skipped -or $walk.ErrorCount) { throw 'Existing task tree is unsafe or unreadable; installation stopped.' }
     foreach ($entry in $logEntries) { Set-ProtectedTrapAcl $entry.FullName $readerSid (-not $entry.PSIsContainer) }
+    # Upgrading a 2.2.x install: its records sit in the trap root. They are moved
+    # into logs\ only now, after every file was protected and checked for links;
+    # moved and merged files are protected again explicitly afterwards.
+    Move-LegacyTrapLogs -InstallDir $InstallDir -LogsDir $logs
+    foreach ($entry in @(Get-ChildItem -LiteralPath $logs -File -Force -ErrorAction Stop)) { Set-ProtectedTrapAcl $entry.FullName $readerSid $true }
     $installedScript = Join-Path $bin 'fotokapan.ps1'
     $installedCore = Join-Path $library 'OpenRelax.Core.ps1'
     $sourceCore = Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1'
@@ -187,7 +232,9 @@ if ($Install -or $Uninstall) {
     }
 
     $ps        = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $action    = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -LogDir "{1}"' -f $installedScript, $logs)
+    $taskArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -LogDir "{1}"' -f $installedScript, $logs
+    if ($RecordCommandLines) { $taskArguments += ' -RecordCommandLines' }
+    $action    = New-ScheduledTaskAction -Execute $ps -Argument $taskArguments
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     # Task Scheduler defaults to priority 7 (below normal), which would starve
@@ -245,8 +292,24 @@ function Write-Heartbeat($State) {
 }
 
 function Protect-CommandLine([string]$Cmd, [int]$Max = 300) {
-    # Arguments are never retained. Pattern matching cannot guarantee that arbitrary secrets are removed.
-    return ''
+    # Arguments are kept only when the user opted in. Pattern matching cannot
+    # guarantee that arbitrary secrets are removed, which the setting says.
+    if (-not $script:RecordCommandLines -or -not $Cmd) { return '' }
+    # key=value / --key value / "Authorization: Bearer x" forms, URL user info,
+    # query parameters (each up to the next &) and curl-style -u user:password.
+    $c = $Cmd -replace '(?i)(://[^:/\s]+:)[^@\s]+@', '$1***@'
+    $c = $c -replace '(?i)(\s(?:-u|--user)\s+[^:\s]+:)\S+', '$1***'
+    $c = $c -replace '(?i)((?:token|api[_-]?key|key|secret|password|passwd|pwd|auth\w*|bearer|sig|signature|cookie|session|credential\w*)\S*?[=:\s]+)((?:bearer|basic|token)\s+)?("[^"]*"|''[^'']*''|[^\s&"]+)', '$1$2***'
+    if ($c.Length -gt $Max) { $c = $c.Substring(0, $Max) + '...' }
+    return $c
+}
+
+# Started by Task Scheduler: COM-handler tasks run under taskhostw.exe, program
+# tasks are children of the svchost instance hosting "Schedule". Decided from
+# the raw parent command line, which is then discarded unless recording is on.
+function Test-ScheduledParent([string]$ParentName, [string]$ParentCmd) {
+    if ($ParentName -eq 'taskhostw.exe') { return $true }
+    return ($ParentName -eq 'svchost.exe' -and $ParentCmd -match '\s-s\s+Schedule\b')
 }
 
 # Cumulative CPU milliseconds per PID.
@@ -266,7 +329,32 @@ function Get-CpuTimes {
 #endregion
 
 #region Capture
-# Returns 'scan' (an on-demand scan explains the load) or 'realtime'.
+# Top scanning processes and the folders holding the most-scanned files, from
+# a Get-MpPerformanceReport object, for the JSONL record. Live reports hold
+# rows without a path and archive members as "C:\a.zip->inner\file", so the
+# folder is cut out with plain string work (Split-Path throws on '').
+function ConvertTo-DefenderTop($Report) {
+    $procs = @(@($Report.TopProcesses) | Where-Object { $_ -and [string]$_.ProcessPath } | Select-Object -First 3 | ForEach-Object {
+        [ordered]@{ path = [string]$_.ProcessPath; count = [int]$_.Count; ms = [int][Math]::Round(([TimeSpan]$_.TotalDuration).TotalMilliseconds) } })
+    $byFolder = @{}
+    foreach ($f in @(@($Report.TopFiles) | Where-Object { $_ })) {
+        $p = ([string]$f.Path -split '->', 2)[0]
+        $cut = $p.LastIndexOf('\')
+        if ($cut -le 0) { continue }
+        $dir = $p.Substring(0, $cut)
+        if ($dir -match '^[A-Za-z]:$') { $dir += '\' }
+        if (-not $byFolder.ContainsKey($dir)) { $byFolder[$dir] = @{ count = 0; ms = 0.0 } }
+        $byFolder[$dir].count += [int]$f.Count
+        $byFolder[$dir].ms += ([TimeSpan]$f.TotalDuration).TotalMilliseconds
+    }
+    $folders = @($byFolder.GetEnumerator() | Sort-Object -Property @{ Expression = { $_.Value.ms } } -Descending | Select-Object -First 3 | ForEach-Object {
+        [ordered]@{ path = [string]$_.Key; count = [int]$_.Value.count; ms = [int][Math]::Round($_.Value.ms) } })
+    return [ordered]@{ processes = $procs; folders = $folders }
+}
+
+# Returns @{ Status = 'scan' (an on-demand scan explains the load) or
+# 'realtime'; Top = ConvertTo-DefenderTop result when a -DefenderTrace
+# recording was taken, otherwise $null }.
 function Invoke-DefenderTrace {
     $lines = New-Object System.Collections.Generic.List[string]
     # On-demand scans (quick/full/custom) log 1000 on start and 1001/1002 on
@@ -283,10 +371,11 @@ function Invoke-DefenderTrace {
     if ($scan) {
         $lines.Add("  Defender: son olay tarama başlangıcı ($scan); tarama yükü olası. Performans kaydı alınmadı.")
         Write-Trap ($lines -join "`r`n")
-        return 'scan'
+        return @{ Status = 'scan'; Top = $null }
     }
     $lines.Add('  Defender: süren tarama olayı bulunamadı; gerçek zamanlı tarama olası.')
-    if (-not $script:RecordDefenderTrace) { Write-Trap ($lines -join "`r`n"); return 'realtime' }
+    if (-not $script:RecordDefenderTrace) { Write-Trap ($lines -join "`r`n"); return @{ Status = 'realtime'; Top = $null } }
+    $top = $null
     # A recording costs ~30 s of WPR tracing plus report parsing: rate-limit it.
     if (((Get-Date) - $script:LastDefenderTrace).TotalHours -lt 6) {
         $lines.Add('  (Defender performans kaydı son 6 saat içinde alındı, tekrarlanmadı.)')
@@ -295,9 +384,12 @@ function Invoke-DefenderTrace {
         $etl = Join-Path $LogDir ('defender-{0:yyyyMMdd-HHmmss}.etl' -f (Get-Date))
         try {
             New-MpPerformanceRecording -RecordTo $etl -Seconds 30 | Out-Null
-            $report = Get-MpPerformanceReport -Path $etl -TopProcesses 8 -TopFiles 10 -TopExtensions 8 | Out-String -Width 220
+            # One report object feeds both the human log and the JSONL record
+            $report = Get-MpPerformanceReport -Path $etl -TopProcesses 8 -TopFiles 20 -TopExtensions 8
             $lines.Add('  Defender 30 sn performans kaydı (en çok tarama yaptıran süreçler / dosyalar):')
-            $lines.Add($report.TrimEnd())
+            $lines.Add(($report | Out-String -Width 220).TrimEnd())
+            # The JSONL summary is extra: a failure there must not cost the text report
+            try { $top = ConvertTo-DefenderTop $report } catch { $lines.Add("  (Defender özeti çıkarılamadı: $($_.Exception.Message))") }
         } catch {
             $lines.Add("  Defender performans kaydı alınamadı: $($_.Exception.Message)")
         } finally {
@@ -305,7 +397,7 @@ function Invoke-DefenderTrace {
         }
     }
     Write-Trap ($lines -join "`r`n")
-    return 'realtime'
+    return @{ Status = 'realtime'; Top = $top }
 }
 
 function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
@@ -332,7 +424,9 @@ function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
     }
 
     $procs = @{}
-    foreach ($w in Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name, CreationDate, WorkingSetSize) {
+    # CommandLine stays in memory: it only decides the scheduled-task flag, and
+    # is written (masked) solely when command-line recording was opted in.
+    foreach ($w in Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name, CreationDate, WorkingSetSize, CommandLine) {
         $procs[[int]$w.ProcessId] = $w
     }
 
@@ -348,28 +442,35 @@ function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
 
     $lines = New-Object System.Collections.Generic.List[string]
     $topRecords = New-Object System.Collections.Generic.List[object]
+    $cmdHeader = 'Argüman kaydı kapalı'
+    if ($script:RecordCommandLines) { $cmdHeader = 'Komut satırı (maskeli)' }
     $lines.Add('')
     $lines.Add(('==== {0:yyyy-MM-dd HH:mm:ss}  {1}' -f $start, $Title))
     $lines.Add(('  {3}: toplam %{0:N0} | süreçlere atanan %{1:N0} | süreçlere atanamayan CPU %{2:N0}' -f $total, $attributed, [Math]::Max(0, $total - $attributed), $window))
-    $lines.Add('   %CPU      PID  Süreç                  Bellek  Ebeveyn                   Argüman kaydı kapalı')
+    $lines.Add('   %CPU      PID  Süreç                  Bellek  Ebeveyn                   ' + $cmdHeader)
     foreach ($r in $top) {
         $w = $procs[$r.Id]
-        $name = '?'; $short = '?'; $mem = 0; $parent = ''; $parentName = ''; $cmd = ''
+        $name = '?'; $short = '?'; $mem = 0; $parent = ''; $parentName = ''; $cmd = ''; $rawParentCmd = ''
         if ($w) {
             $name = $w.Name
             $short = $name
             if ($short.Length -gt 20) { $short = $short.Substring(0, 19) + '~' }
             $mem  = [int]($w.WorkingSetSize / 1MB)
-            $cmd  = Protect-CommandLine ''
+            $cmd  = Protect-CommandLine ([string]$w.CommandLine)
             $ppid = [int]$w.ParentProcessId
-            if ($procs.ContainsKey($ppid)) { $parentName = $procs[$ppid].Name; $parent = '{0}({1})' -f $parentName, $ppid }
+            if ($procs.ContainsKey($ppid)) {
+                $parentName = $procs[$ppid].Name; $parent = '{0}({1})' -f $parentName, $ppid
+                $rawParentCmd = [string]$procs[$ppid].CommandLine
+            }
             else { $parent = "(kapanmış $ppid)" }
         }
         $lines.Add(('  {0,5:N1} {1,8}  {2,-20} {3,6}MB  {4,-24}  {5}' -f $r.Pct, $r.Id, $short, $mem, $parent, $cmd))
         if ($topRecords.Count -lt 5) {
             $topRecords.Add([ordered]@{
                 name = $name; pid = $r.Id; pct = [Math]::Round($r.Pct, 1)
-                parent = $parentName; cmd = (Protect-CommandLine '' 200)
+                parent = $parentName; scheduled = [bool](Test-ScheduledParent $parentName $rawParentCmd)
+                cmd = (Protect-CommandLine ([string]$(if ($w) { $w.CommandLine } else { '' })) 200)
+                parentCmd = (Protect-CommandLine $rawParentCmd 200)
             })
         }
     }
@@ -384,21 +485,23 @@ function Invoke-Capture([string]$Title, [string]$Kind, [switch]$Burst) {
             $ppid = [int]$w.ParentProcessId
             $pn = '?'
             if ($procs.ContainsKey($ppid)) { $pn = $procs[$ppid].Name }
-            $lines.Add(('    {0:HH:mm:ss}  {1,-20} PID {2,-7} <- {3,-20} {4}' -f $w.CreationDate, $w.Name, $w.ProcessId, $pn, (Protect-CommandLine '')))
+            $lines.Add(('    {0:HH:mm:ss}  {1,-20} PID {2,-7} <- {3,-20} {4}' -f $w.CreationDate, $w.Name, $w.ProcessId, $pn, (Protect-CommandLine ([string]$w.CommandLine))))
         }
     }
     Write-Trap ($lines -join "`r`n")
 
-    $defender = $null
+    $defender = $null; $defenderTop = $null
     $busyDefender = $top | Select-Object -First 3 |
         Where-Object { $procs[$_.Id] -and $procs[$_.Id].Name -eq 'MsMpEng.exe' -and $_.Pct -ge 10 }
-    if ($busyDefender) { $defender = Invoke-DefenderTrace }
+    if ($busyDefender) { $trace = Invoke-DefenderTrace; $defender = $trace.Status; $defenderTop = $trace.Top }
 
-    Write-TrapRecord ([ordered]@{
+    $record = [ordered]@{
         t = $start.ToString('s'); kind = $Kind
         window = [Math]::Round($elapsed / 1000, 1); total = [Math]::Round($total, 1); attributed = [Math]::Round($attributed, 1)
         top = $topRecords.ToArray(); defender = $defender   # not @(): PS 5.1 fails on @(List[object]) inside [ordered]
-    })
+    }
+    if ($defenderTop) { $record.defenderTop = $defenderTop }
+    Write-TrapRecord $record
 }
 #endregion
 

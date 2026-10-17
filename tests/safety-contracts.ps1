@@ -12,12 +12,14 @@ function Case([string]$Name,[scriptblock]$Action) {
     try { & $Action; $script:Cases.Add(@{ name = $Name; passed = $true }); Write-Host "PASS $Name" }
     catch { $script:Cases.Add(@{ name = $Name; passed = $false; error = $_.Exception.Message }); Write-Host "FAIL $Name`: $($_.Exception.Message)" }
 }
-$engineNames = @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Get-JunkCategories','Remove-JunkPaths','Measure-JunkPaths','Wait-ServiceState','Invoke-WindowsUpdateCacheCleanup','Invoke-Maintenance','Protect-CommandLine','New-ProtectedTrapAcl','Resolve-TrapReaderSid','Assert-SingleLinkFile','Invoke-DefenderTrace','Get-TrapCulprit')
+$engineNames = @('ConvertTo-DefenderTop','Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Get-JunkCategories','Remove-JunkPaths','Measure-JunkPaths','Wait-ServiceState','Invoke-WindowsUpdateCacheCleanup','Invoke-Maintenance','Protect-CommandLine','New-ProtectedTrapAcl','Resolve-TrapReaderSid','Assert-SingleLinkFile','Invoke-DefenderTrace','Get-TrapCulprit')
 . ([scriptblock]::Create((Get-TestFunctionSource $engineNames)))
 
 Case 'safe defaults and strict settings types' {
     $defaults = Get-DefaultSettings
-    foreach ($key in 'recycle','wu','shader','wer','gpusetup') { Assert-True (-not $defaults.categories[$key]) "Unsafe default: $key" }
+    foreach ($key in 'recycle','wu','shader','wer','gpusetup','devcache') { Assert-True (-not $defaults.categories[$key]) "Unsafe default: $key" }
+    Assert-True (-not $defaults.trapRecordCommandLines) 'Command-line recording is on by default.'
+    Assert-True ($defaults.trapNotify -eq $true) 'Spike notifications are off by default.'
     $path = Join-Path $Work 'settings.json'
     Write-SettingsAtomic $defaults $path
     Assert-True (Read-SettingsDocument $path).Valid 'Valid settings rejected.'
@@ -32,10 +34,23 @@ Case 'safe defaults and strict settings types' {
     $defaults = Get-DefaultSettings; $defaults.language = @('tr'); Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) 'Language array accepted.'
     $legacy = Get-DefaultSettings; $legacy.Remove('schemaVersion'); $legacy.Remove('trimRam'); $legacy.Remove('clearDns'); Write-SettingsAtomic $legacy $path
     $loaded = Read-SettingsDocument $path; Assert-True ($loaded.Valid -and -not $loaded.Settings.trimRam -and -not $loaded.Settings.clearDns) 'Legacy migration changed opt-in defaults.'
+    $defaults = Get-DefaultSettings; $defaults.categories.devcache = 'false'; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) 'String devcache accepted.'
+    foreach ($key in 'trapNotify','trapRecordCommandLines') { $defaults = Get-DefaultSettings; $defaults[$key] = 1; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) "Non-boolean $key accepted." }
     $defaults = Get-DefaultSettings; $defaults.categories.Remove('recycle')
     Write-SettingsAtomic $defaults $path
     Assert-True (-not (Read-SettingsDocument $path).Valid) 'Missing category accepted.'
     Assert-True (-not (Read-SettingsDocument (Join-Path $Work 'missing.json')).Valid) 'Missing settings accepted.'
+}
+Case 'a 2.2.1 settings file migrates with preferences and statistics' {
+    $path = Join-Path $Work 'settings-221.json'
+    $legacy = '{"weeklyClean":false,"categories":{"temp":true,"wer":true,"shader":true,"browser":true,"recycle":true,"gpusetup":true,"discord":true,"wu":false,"devcache":false},"autoBoostLimit":80,"closeToTray":true,"trapNotify":true,"stats":{"totalCleanedBytes":9421688750,"totalRuns":14,"lastClean":"2026-10-16 21:18"},"language":"tr","runAtStartup":true,"autoBoost":true}'
+    [IO.File]::WriteAllText($path,$legacy,[Text.UTF8Encoding]::new($false))
+    $loaded = Read-SettingsDocument $path
+    Assert-True $loaded.Valid ('2.2.1 settings rejected: ' + $loaded.Error)
+    Assert-True ($loaded.Settings.autoBoostLimit -eq 80 -and $loaded.Settings.autoBoost -and $loaded.Settings.runAtStartup) 'Preferences were lost.'
+    Assert-True ($loaded.Settings.stats.totalCleanedBytes -eq 9421688750 -and $loaded.Settings.stats.totalRuns -eq 14) 'Statistics were lost.'
+    Assert-True ($loaded.Settings.categories.recycle -eq $true -and $loaded.Settings.categories.devcache -eq $false) 'Category choices were changed.'
+    Assert-True ($loaded.Settings.trapNotify -eq $true -and $loaded.Settings.trapRecordCommandLines -eq $false) 'Fotokapan preferences were changed.'
 }
 Case 'atomic save preserves the old file after replace failure' {
     $path = Join-Path $Work 'atomic.json'
@@ -109,7 +124,48 @@ Case 'test workspace refuses existing data and invalid ownership' {
     Remove-TestWorkspace $owned
     Assert-True ([IO.File]::ReadAllText($sentinel) -eq 'keep') 'Existing data changed.'
 }
+Case 'every script calls only functions defined above the call' {
+    # Scripts run top to bottom: a top-level block (the Fotokapan installer,
+    # the headless modes) cannot call a function defined further down.
+    $repo = Split-Path -Parent $PSScriptRoot
+    foreach ($script in 'fotokapan.ps1','openrelax.ps1') {
+        $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo $script),[ref]$null,[ref]$null)
+        $defined = @{}
+        foreach ($fn in $ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent.Parent -eq $ast.EndBlock -or ($n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent -eq $ast.EndBlock) },$true)) {
+            if (-not $defined.ContainsKey($fn.Name)) { $defined[$fn.Name] = $fn.Extent.StartOffset }
+        }
+        foreach ($statement in $ast.EndBlock.Statements) {
+            if ($statement -is [Management.Automation.Language.FunctionDefinitionAst]) { continue }
+            # Calls inside script-block literals (event handlers, worker code) run later.
+            $calls = $statement.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true) | Where-Object {
+                $owner = $_.Parent
+                while ($owner -and $owner -ne $statement -and -not ($owner -is [Management.Automation.Language.ScriptBlockExpressionAst]) -and -not ($owner -is [Management.Automation.Language.FunctionDefinitionAst])) { $owner = $owner.Parent }
+                $owner -eq $statement
+            }
+            foreach ($call in $calls) {
+                $name = $call.GetCommandName()
+                if ($name -and $defined.ContainsKey($name)) {
+                    Assert-True ($defined[$name] -lt $call.Extent.StartOffset) "$script line $($call.Extent.StartLineNumber) calls $name before it is defined."
+                }
+            }
+        }
+    }
+}
+Case 'opted-in command lines are masked and bounded' {
+    $script:RecordCommandLines = $true
+    try {
+        $masked = Protect-CommandLine 'tool --token=FAKE_TOKEN --api-key FAKE_KEY password "FAKE SECRET" --keep me'
+        Assert-True ($masked -notmatch 'FAKE_TOKEN|FAKE_KEY|FAKE SECRET') "Secret retained: $masked"
+        Assert-True ($masked -match '--keep me') "Ordinary argument lost: $masked"
+        Assert-True ((Protect-CommandLine ('x' * 500)).Length -le 303) 'Command line was not truncated.'
+        foreach ($input in @('curl -H "Authorization: Bearer FAKE_BEARER" https://example.invalid','curl -u demo:FAKE_PASSWORD https://example.invalid','tool https://demo:FAKE_PASSWORD@example.invalid/?key=FAKE_KEY&sig=FAKE_SIG','app --session-cookie=FAKE_COOKIE')) {
+            $masked = Protect-CommandLine $input
+            Assert-True ($masked -notmatch 'FAKE_') "Secret retained: $masked"
+        }
+    } finally { $script:RecordCommandLines = $false }
+}
 Case 'command arguments cannot leak through supported or positional formats' {
+    $script:RecordCommandLines = $false
     foreach ($input in @('curl -H "Authorization: Bearer FAKE_BEARER"','tool --password ''FAKE SECRET''','tool --token=FAKE_TOKEN','curl -u demo:FAKE_PASSWORD','https://demo:FAKE_PASSWORD@example.invalid/?key=FAKE_KEY','{"password":"FAKE_PASSWORD"}')) {
         Assert-True ((Protect-CommandLine $input) -eq '') 'Command argument was retained.'
     }
@@ -154,10 +210,10 @@ Case 'default Defender classification omits raw event resources and tracing' {
     function Get-WinEvent { param($FilterHashtable,$MaxEvents) return @{ Id = 1000; TimeCreated = Get-Date; Message = 'Resources: C:\FAKE_PRIVATE_SCAN\document.txt' } }
     function Write-Trap { param($Text) $script:DefenderLog = $Text }
     function New-MpPerformanceRecording { $script:TraceCalls++; throw 'Unexpected tracing' }
-    Assert-True ((Invoke-DefenderTrace) -eq 'scan') 'Scan event was not classified.'
+    Assert-True ((Invoke-DefenderTrace).Status -eq 'scan') 'Scan event was not classified.'
     Assert-True ($script:TraceCalls -eq 0 -and $script:DefenderLog -notmatch 'FAKE_PRIVATE_SCAN|Resources|document') 'Default Defender path disclosed raw details.'
     function Get-WinEvent { throw 'simulated unavailable event log' }
-    Assert-True ((Invoke-DefenderTrace) -eq 'realtime' -and $script:TraceCalls -eq 0) 'Missing event triggered a performance trace.'
+    Assert-True ((Invoke-DefenderTrace).Status -eq 'realtime' -and $script:TraceCalls -eq 0) 'Missing event triggered a performance trace.'
 }
 Case 'unattributed CPU is not diagnosed as a driver' {
     $culprit = Get-TrapCulprit @{ total = 95; attributed = 10; top = @(@{ name = 'demo.exe'; pct = 8 }) }
@@ -180,14 +236,14 @@ Case 'interactive confirmation and opt-in RAM/DNS are enforced' {
 }
 Case 'headless maintenance skips interactive-only categories and propagates errors' {
     $script:RemoveCalls = 0
-    function Get-JunkCategories { return , @(@{ Key = 'recycle'; Paths = @() },@{ Key = 'wu'; Paths = @() },@{ Key = 'temp'; Paths = @() }) }
+    function Get-JunkCategories { return , @(@{ Key = 'recycle'; Paths = @() },@{ Key = 'wu'; Paths = @() },@{ Key = 'devcache'; Paths = @() },@{ Key = 'temp'; Paths = @() }) }
     function Clear-RecycleBin { throw 'Unexpected recycle operation.' }
     function Invoke-WindowsUpdateCacheCleanup { throw 'Unexpected service operation.' }
     function Remove-JunkPaths { param($Paths,[bool]$IsAdmin) $script:RemoveCalls++; throw 'simulated file error' }
     $script:RemoveCalls = 0
-    $result = Invoke-Maintenance @{ Keys = @('recycle','wu','temp'); Headless = $true }
-    Assert-True ($script:RemoveCalls -eq 1 -and $result.Errors[0] -match 'simulated file error') 'Maintenance failed for an unrelated reason.'
-    Assert-True ($result.Status -eq 'Failed' -and $result.Skipped -eq 2 -and $result.Errors.Count -eq 1) 'Headless failure hidden.'
+    $result = Invoke-Maintenance @{ Keys = @('recycle','wu','devcache','temp'); Headless = $true }
+    Assert-True ($script:RemoveCalls -eq 1 -and $result.Errors[0] -match 'simulated file error') 'Maintenance failed for an unrelated reason or cleaned developer caches headless.'
+    Assert-True ($result.Status -eq 'Failed' -and $result.Skipped -eq 3 -and $result.Errors.Count -eq 1) 'Headless failure hidden.'
 }
 Case 'Windows Update restores states and refuses stop/restart failures' {
     foreach ($scenario in 'normal','stopped','stop-first','stop-second','delete','restart','non-admin','paused','pending','stop-noop','stop-after-change','restart-noop') {

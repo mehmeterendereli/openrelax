@@ -1,6 +1,35 @@
 # Changelog
 
-## Unreleased
+## 2.3.0 — unreleased
+
+This release joins the two lines of development. The 2.2 features were built
+locally on top of 2.1.1 and never published (they are kept on branch
+`archive/local-2.2.1`); `main` meanwhile received the hardening below. 2.3.0 is
+`main` plus the 2.2 features, ported onto its safety model. Design and plan:
+`docs/superpowers/specs/2026-10-17-openrelax-roadmap-design.md`,
+`docs/superpowers/plans/2026-10-17-openrelax-2.3.md`.
+
+### Added
+- **Fotokapan diagnosis.** The tab's Summary page turns the last 7 days of spikes into findings per culprit category: Defender (on-demand scans vs. real-time scanning, with the folder it scanned most when a `-DefenderTrace` recording exists), games, developer/AI tools, browser, Windows, scheduled tasks and unattributed CPU. Each finding gives its share and what to do. The page also shows the culprit table and spikes per hour of day.
+- **Records page and report.** Every spike with duration, peak, culprit and notes (Defender scan/real-time, scheduled task); **Save report** writes the diagnosis as Markdown to `Documents\OpenRelax\`.
+- **Spike notifications.** A tray balloon when a new spike is recorded (at most one per 15 minutes; a click opens the records; switch on the Fotokapan tab).
+- **Opt-in command-line recording.** Off by default. When switched on (Fotokapan tab, then Install / Update), the trap keeps masked command lines of the top processes and their parents, so a `python.exe` or `node.exe` spike shows which script ran. Masking is best effort and the setting says so.
+- **Scheduled-task detection without storing arguments.** The recorder decides from the parent's command line whether Task Scheduler started a process, then discards it.
+- **Developer caches** category (npm, pip, NuGet, Yarn): opt-in, files untouched for 24 h only, never cleaned by headless AutoClean.
+- **Live cleaning progress**: files and bytes deleted so far on the button.
+- `tests/unit.ps1` (part of `verify.ps1`) and `tests/run-all.ps1` (release gate).
+
+### Changed
+- **Engine walker.** Scan, clean and disk analysis share `Invoke-JunkWalk` (`lib/OpenRelax.Engine.ps1`): one directory walk that never enters reparse points, re-checks the folder chain and each file before deleting, and reports progress by elapsed time. Removing 30 000 files: about 6.6 s.
+- **Disk analysis** walks the profile once (at most 90 s) with per-folder totals; files directly in the profile get their own row.
+- **RAM trimming** leaves the foreground app, processes busy during a 500 ms CPU sample and processes under 30 MB alone, and logs how many it skipped.
+- Fotokapan record reading, diagnosis and report logic moved to `lib/OpenRelax.Trap.ps1`; settings schema 3 (`devcache`, `trapNotify`, `trapRecordCommandLines`; older files load unchanged).
+
+### Fixed
+- **Upgrading a 2.2.x trap lost the visible history.** 2.2.x wrote its records to the trap root; 2.3 reads `logs\`. The GUI now also reads the old root until the trap is reinstalled, and installing moves the files into `logs\` (a month present in both keeps the older lines first).
+- Defender recordings no longer lose their summary on report rows without a path or on archive members (from 2.2.1).
+
+### Hardening carried over from `main` (previously "Unreleased")
 
 - Add a current-user desktop shortcut installer and a multi-resolution icon matching the application branding.
 - Split typed settings, atomic persistence, path guards and maintenance orchestration into `lib/OpenRelax.Core.ps1`.

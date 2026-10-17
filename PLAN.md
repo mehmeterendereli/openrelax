@@ -1,4 +1,19 @@
-# OpenRelax uçtan uca geliştirme planı
+# OpenRelax geliştirme planı
+
+## Yol haritası (2026-10-17)
+
+Tasarım: [docs/superpowers/specs/2026-10-17-openrelax-roadmap-design.md](docs/superpowers/specs/2026-10-17-openrelax-roadmap-design.md).
+2.3.0 uygulama planı: [docs/superpowers/plans/2026-10-17-openrelax-2.3.md](docs/superpowers/plans/2026-10-17-openrelax-2.3.md).
+
+| Sürüm | İçerik | Durum |
+| --- | --- | --- |
+| 2.3.0 | Yayınlanmamış 2.2 hattının (`archive/local-2.2.1`) bu ana hatta taşınması: tek geçişli korumalı walker, canlı ilerleme, disk analizi, geliştirici önbellekleri, RAM hedef seçimi, Fotokapan teşhisi/kayıtları/raporu/bildirimi, isteğe bağlı maskeli komut satırı, 2.2 kayıt göçü | Kod ve yerel kabul tamamlandı; PR ve CI bekliyor |
+| 2.4 | Dağıtım: `%LOCALAPPDATA%` kurulumu, başlangıç/görev yolu onarımı, Release zip + SHA256, Scoop, güncelleme bildirimi, toast | Planlandı |
+| 2.5 | Fotokapan: arayüzden eşik, betik içgörüsü, disk/bellek/GPU sıçramaları, Olay Günlüğü korelasyonu, trend grafiği, CSV, saklama süresi | Planlandı |
+| 2.6 | Temizlik: önizleme, hariç tutma listesi, yeni hedefler, ayrıntılı geçmiş, CLI | Planlandı |
+| 2.7 | Sistem sağlığı sekmesi: başlangıç programları, disk sağlığı, pil, büyük dosyalar, rapor | Planlandı |
+
+## 2.1 Preview sağlamlaştırma planı (tamamlandı)
 
 Kapsam: mevcut kaynak sürümünün güvenliği, sonuç doğruluğu, açık kaynak bakımı ve arayüzü.
 Kaynak başlangıcı: `a9750d4`; çalışma dalı: `codex/openrelax-safety-and-oss-20261009`.
