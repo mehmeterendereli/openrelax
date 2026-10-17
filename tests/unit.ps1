@@ -123,10 +123,80 @@ Case 'dry run on live processes never targets the foreground app or itself' {
     $appAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'),[ref]$null,[ref]$null)
     $api = @($appAst.FindAll({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$apiSource' },$true))[0].Right.Expression.Value
     if (-not ([Management.Automation.PSTypeName]'Win32Helper').Type) { Add-Type -TypeDefinition $api }
+    # The user may switch windows meanwhile: judge only a foreground app that
+    # stayed the same around the whole sample.
+    $fgBefore = [int][Win32Helper]::GetForegroundProcessId()
     $dry = Invoke-RamTrim -DryRun
-    $fgPid = [int][Win32Helper]::GetForegroundProcessId()
+    $fgAfter = [int][Win32Helper]::GetForegroundProcessId()
     Assert-True ($dry.Success -eq 0 -and @($dry.Targets) -notcontains $PID -and $dry.Skipped -gt 0) "Targets $(@($dry.Targets).Count), skipped $($dry.Skipped)."
-    Assert-True ($fgPid -eq 0 -or @($dry.Targets) -notcontains $fgPid) 'The foreground process was targeted.'
+    Assert-True ($fgBefore -ne $fgAfter -or $fgBefore -eq 0 -or @($dry.Targets) -notcontains $fgBefore) 'The foreground process was targeted.'
+}
+#endregion
+
+#region Fotokapan recorder helpers
+. ([scriptblock]::Create((Get-TestFunctionSource @('Assert-SingleLinkFile','ConvertTo-DefenderTop','Test-ScheduledParent','Move-LegacyTrapLogs'))))
+$fakeReport = [pscustomobject]@{
+    TopProcesses = @([pscustomobject]@{ ProcessPath = 'C:\x\codex.exe'; Count = 83; TotalDuration = [TimeSpan]::FromMilliseconds(937) })
+    TopFiles = @(
+        [pscustomobject]@{ Path = 'C:\u\.codex\sessions\a.jsonl'; Count = 8; TotalDuration = [TimeSpan]::FromMilliseconds(65) },
+        [pscustomobject]@{ Path = 'C:\u\.codex\sessions\b.jsonl'; Count = 4; TotalDuration = [TimeSpan]::FromMilliseconds(30) },
+        [pscustomobject]@{ Path = 'C:\t\x.tmp'; Count = 1; TotalDuration = [TimeSpan]::FromMilliseconds(12) })
+}
+Case 'Defender top process kept with count and ms' {
+    $top = ConvertTo-DefenderTop $fakeReport
+    Assert-True ($top.processes[0].path -eq 'C:\x\codex.exe' -and $top.processes[0].count -eq 83 -and $top.processes[0].ms -eq 937) 'Top process lost.'
+}
+Case 'scanned files fold into their folders, heaviest first' {
+    $top = ConvertTo-DefenderTop $fakeReport
+    Assert-True ($top.folders[0].path -eq 'C:\u\.codex\sessions' -and $top.folders[0].count -eq 12 -and $top.folders[0].ms -eq 95 -and $top.folders.Count -eq 2) 'Folders were not folded.'
+}
+Case 'an empty Defender report gives empty lists' {
+    $empty = ConvertTo-DefenderTop ([pscustomobject]@{ TopProcesses = $null; TopFiles = $null })
+    Assert-True (@($empty.processes).Count -eq 0 -and @($empty.folders).Count -eq 0) 'An empty report was not empty.'
+}
+Case 'rows without a path are skipped, archive members count for the archive folder' {
+    $odd = ConvertTo-DefenderTop ([pscustomobject]@{
+        TopProcesses = @([pscustomobject]@{ ProcessPath = ''; Count = 1; TotalDuration = [TimeSpan]::FromMilliseconds(6) })
+        TopFiles = @(
+            [pscustomobject]@{ Path = ''; Count = 3; TotalDuration = [TimeSpan]::FromMilliseconds(9) },
+            [pscustomobject]@{ Path = 'C:\d\pack.zip->inner\x.js'; Count = 2; TotalDuration = [TimeSpan]::FromMilliseconds(5) },
+            [pscustomobject]@{ Path = 'C:\y.txt'; Count = 1; TotalDuration = [TimeSpan]::FromMilliseconds(1) })
+    })
+    Assert-True (@($odd.processes).Count -eq 0 -and @($odd.folders).Count -eq 2 -and $odd.folders[0].path -eq 'C:\d' -and $odd.folders[0].count -eq 2 -and $odd.folders[1].path -eq 'C:\') 'Odd rows were mishandled.'
+}
+Case 'Defender top serializes as the JSONL contract expects' {
+    $json = ConvertTo-Json -InputObject (ConvertTo-DefenderTop $fakeReport) -Compress -Depth 5
+    Assert-True ($json -match '^\{"processes":\[\{"path":"C:\\\\x\\\\codex.exe","count":83,"ms":937\}\],"folders":\[') $json
+}
+Case 'scheduled-task parents are recognised from the raw parent command line' {
+    Assert-True (Test-ScheduledParent 'taskhostw.exe' '') 'taskhostw was not recognised.'
+    Assert-True (Test-ScheduledParent 'svchost.exe' 'C:\WINDOWS\system32\svchost.exe -k netsvcs -p -s Schedule') 'The Schedule service host was not recognised.'
+    Assert-True (-not (Test-ScheduledParent 'svchost.exe' 'C:\WINDOWS\system32\svchost.exe -k netsvcs -p -s BITS')) 'Another service host was called scheduled.'
+    Assert-True (-not (Test-ScheduledParent 'explorer.exe' '')) 'explorer was called scheduled.'
+}
+Case '2.2 logs in the trap root move into logs, root lines first' {
+    $install = Join-Path $Work 'trap-install'; $logs = Join-Path $install 'logs'
+    [void][IO.Directory]::CreateDirectory($logs)
+    [IO.File]::WriteAllText((Join-Path $install 'spikes-2026-10.jsonl'),"{`"t`":`"r1`"}`n{`"t`":`"r2`"}`n")
+    [IO.File]::WriteAllText((Join-Path $install 'spikes-2026-09.jsonl'),"{`"t`":`"s1`"}`n")
+    [IO.File]::WriteAllText((Join-Path $install 'fotokapan-2026-10.log'),"old log`n")
+    [IO.File]::WriteAllText((Join-Path $install 'durum.json'),'{"t":"old"}')
+    [IO.File]::WriteAllText((Join-Path $install 'fotokapan.ps1'),'# 2.2.1')
+    [IO.File]::WriteAllText((Join-Path $install 'notes.txt'),'unrelated')
+    [IO.File]::WriteAllText((Join-Path $logs 'spikes-2026-10.jsonl'),"{`"t`":`"n1`"}`n")
+    [IO.File]::WriteAllText((Join-Path $logs 'durum.json'),'{"t":"new"}')
+    Move-LegacyTrapLogs -InstallDir $install -LogsDir $logs
+    $merged = @([IO.File]::ReadAllLines((Join-Path $logs 'spikes-2026-10.jsonl')) | Where-Object { $_ })
+    Assert-True ($merged.Count -eq 3 -and $merged[0] -match 'r1' -and $merged[1] -match 'r2' -and $merged[2] -match 'n1') ('Merged: ' + ($merged -join '|'))
+    Assert-True (Test-Path -LiteralPath (Join-Path $logs 'spikes-2026-09.jsonl')) 'A month only in the root was not moved.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $logs 'fotokapan-2026-10.log')) 'The text log was not moved.'
+    Assert-True ([IO.File]::ReadAllText((Join-Path $logs 'durum.json')) -match 'new') 'A stale heartbeat replaced the current one.'
+    foreach ($name in 'spikes-2026-10.jsonl','spikes-2026-09.jsonl','fotokapan-2026-10.log','durum.json','fotokapan.ps1') {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $install $name))) "Legacy root file remained: $name"
+    }
+    Assert-True (Test-Path -LiteralPath (Join-Path $install 'notes.txt')) 'An unrelated file was touched.'
+    Move-LegacyTrapLogs -InstallDir $install -LogsDir $logs
+    Assert-True (@([IO.File]::ReadAllLines((Join-Path $logs 'spikes-2026-10.jsonl')) | Where-Object { $_ }).Count -eq 3) 'A second run duplicated records.'
 }
 #endregion
 

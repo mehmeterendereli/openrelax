@@ -2055,6 +2055,7 @@ function Start-TrapAction([string]$Mode) {
     if (-not (Test-Path -LiteralPath $script:TrapScript)) { Write-Log (T 'logTrapNoScript') 'error'; return }
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ('"{0}"' -f $script:TrapScript), ('-' + $Mode))
     if ($Mode -eq 'Install') { $argList += @('-ReaderSid',[Security.Principal.WindowsIdentity]::GetCurrent().User.Value) }
+    if ($Mode -eq 'Install' -and $script:Settings.trapRecordCommandLines) { $argList += '-RecordCommandLines' }
     $sp = @{ FilePath = $script:PsExe; ArgumentList = $argList; PassThru = $true; WindowStyle = 'Hidden' }
     # Registering a SYSTEM task needs elevation: ask through UAC when not admin.
     if (-not $script:IsAdmin) { $sp.Verb = 'RunAs' }

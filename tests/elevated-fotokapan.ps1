@@ -54,7 +54,7 @@ function Wait-TrapTaskRunning {
 }
 
 function Invoke-Installer {
-    param([ValidateSet('Install','Uninstall')][string]$Mode)
+    param([ValidateSet('Install','Uninstall')][string]$Mode, [switch]$RecordCommandLines)
     $arguments = @(
         '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
         '-File',$SourceScript,('-' + $Mode)
@@ -62,6 +62,7 @@ function Invoke-Installer {
     if ($Mode -eq 'Install') {
         $arguments += @('-ReaderSid',$ReaderSid)
     }
+    if ($RecordCommandLines) { $arguments += '-RecordCommandLines' }
     & $PowerShellExe @arguments
     if ($LASTEXITCODE -ne 0) { throw "Fotokapan $Mode exited $LASTEXITCODE." }
 }
@@ -173,8 +174,22 @@ exit 98
 '@
     [IO.File]::WriteAllText($ProbeScript,$probe,[Text.UTF8Encoding]::new($false))
 
+    # A 2.2.x install kept records, log, heartbeat and script in the trap root.
+    [void][IO.Directory]::CreateDirectory($LogsDir)
+    [IO.File]::WriteAllText((Join-Path $InstallDir 'spikes-2026-10.jsonl'),"{`"t`":`"legacy-1`"}`n{`"t`":`"legacy-2`"}`n")
+    [IO.File]::WriteAllText((Join-Path $InstallDir 'durum.json'),'{"t":"legacy"}')
+    [IO.File]::WriteAllText((Join-Path $InstallDir 'fotokapan.ps1'),'# 2.2.1 script')
+    [IO.File]::WriteAllText((Join-Path $LogsDir 'spikes-2026-10.jsonl'),"{`"t`":`"current-1`"}`n")
+
     Invoke-Installer Install
     $task = Wait-TrapTaskRunning
+    $migrated = @([IO.File]::ReadAllLines((Join-Path $LogsDir 'spikes-2026-10.jsonl')) | Where-Object { $_ -match 'legacy-|current-' })
+    Assert-True ($migrated.Count -eq 3 -and $migrated[0] -match 'legacy-1' -and $migrated[2] -match 'current-1') ('Legacy records were not merged: ' + ($migrated -join '|'))
+    foreach ($name in 'spikes-2026-10.jsonl','durum.json','fotokapan.ps1') {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $InstallDir $name))) "Legacy root file remained: $name"
+    }
+    Assert-ProtectedAcl (Join-Path $LogsDir 'spikes-2026-10.jsonl') $true
+    Assert-True ([string]$task.Actions[0].Arguments -notmatch 'RecordCommandLines') 'Command-line recording was enabled without opt-in.'
 
     $principalId = [string]$task.Principal.UserId
     Assert-True ($principalId -eq $SystemSid -or $principalId -eq 'SYSTEM' -or $principalId -like '*\SYSTEM') "Task principal is not SYSTEM: $principalId"
@@ -211,8 +226,9 @@ exit 98
 
     # Exercise the real upgrade path: the existing task must be disabled/stopped,
     # sources replaced atomically, and a fresh SYSTEM task started.
-    Invoke-Installer Install
+    Invoke-Installer Install -RecordCommandLines
     $task = Wait-TrapTaskRunning
+    Assert-True ([string]$task.Actions[0].Arguments -match '\s-RecordCommandLines$') 'The command-line opt-in did not reach the task.'
     Assert-True ((Get-FileHash -LiteralPath $InstalledScript -Algorithm SHA256).Hash -eq $sourceHash) 'Upgrade changed the installed Fotokapan source.'
     Assert-True ((Get-FileHash -LiteralPath $InstalledCore -Algorithm SHA256).Hash -eq $coreHash) 'Upgrade changed the installed core library.'
 

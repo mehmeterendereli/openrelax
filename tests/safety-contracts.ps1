@@ -12,7 +12,7 @@ function Case([string]$Name,[scriptblock]$Action) {
     try { & $Action; $script:Cases.Add(@{ name = $Name; passed = $true }); Write-Host "PASS $Name" }
     catch { $script:Cases.Add(@{ name = $Name; passed = $false; error = $_.Exception.Message }); Write-Host "FAIL $Name`: $($_.Exception.Message)" }
 }
-$engineNames = @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Get-JunkCategories','Remove-JunkPaths','Measure-JunkPaths','Wait-ServiceState','Invoke-WindowsUpdateCacheCleanup','Invoke-Maintenance','Protect-CommandLine','New-ProtectedTrapAcl','Resolve-TrapReaderSid','Assert-SingleLinkFile','Invoke-DefenderTrace','Get-TrapCulprit')
+$engineNames = @('ConvertTo-DefenderTop','Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Get-JunkCategories','Remove-JunkPaths','Measure-JunkPaths','Wait-ServiceState','Invoke-WindowsUpdateCacheCleanup','Invoke-Maintenance','Protect-CommandLine','New-ProtectedTrapAcl','Resolve-TrapReaderSid','Assert-SingleLinkFile','Invoke-DefenderTrace','Get-TrapCulprit')
 . ([scriptblock]::Create((Get-TestFunctionSource $engineNames)))
 
 Case 'safe defaults and strict settings types' {
@@ -124,7 +124,17 @@ Case 'test workspace refuses existing data and invalid ownership' {
     Remove-TestWorkspace $owned
     Assert-True ([IO.File]::ReadAllText($sentinel) -eq 'keep') 'Existing data changed.'
 }
+Case 'opted-in command lines are masked and bounded' {
+    $script:RecordCommandLines = $true
+    try {
+        $masked = Protect-CommandLine 'tool --token=FAKE_TOKEN --api-key FAKE_KEY password "FAKE SECRET" --keep me'
+        Assert-True ($masked -notmatch 'FAKE_TOKEN|FAKE_KEY|FAKE SECRET') "Secret retained: $masked"
+        Assert-True ($masked -match '--keep me') "Ordinary argument lost: $masked"
+        Assert-True ((Protect-CommandLine ('x' * 500)).Length -le 303) 'Command line was not truncated.'
+    } finally { $script:RecordCommandLines = $false }
+}
 Case 'command arguments cannot leak through supported or positional formats' {
+    $script:RecordCommandLines = $false
     foreach ($input in @('curl -H "Authorization: Bearer FAKE_BEARER"','tool --password ''FAKE SECRET''','tool --token=FAKE_TOKEN','curl -u demo:FAKE_PASSWORD','https://demo:FAKE_PASSWORD@example.invalid/?key=FAKE_KEY','{"password":"FAKE_PASSWORD"}')) {
         Assert-True ((Protect-CommandLine $input) -eq '') 'Command argument was retained.'
     }
@@ -169,10 +179,10 @@ Case 'default Defender classification omits raw event resources and tracing' {
     function Get-WinEvent { param($FilterHashtable,$MaxEvents) return @{ Id = 1000; TimeCreated = Get-Date; Message = 'Resources: C:\FAKE_PRIVATE_SCAN\document.txt' } }
     function Write-Trap { param($Text) $script:DefenderLog = $Text }
     function New-MpPerformanceRecording { $script:TraceCalls++; throw 'Unexpected tracing' }
-    Assert-True ((Invoke-DefenderTrace) -eq 'scan') 'Scan event was not classified.'
+    Assert-True ((Invoke-DefenderTrace).Status -eq 'scan') 'Scan event was not classified.'
     Assert-True ($script:TraceCalls -eq 0 -and $script:DefenderLog -notmatch 'FAKE_PRIVATE_SCAN|Resources|document') 'Default Defender path disclosed raw details.'
     function Get-WinEvent { throw 'simulated unavailable event log' }
-    Assert-True ((Invoke-DefenderTrace) -eq 'realtime' -and $script:TraceCalls -eq 0) 'Missing event triggered a performance trace.'
+    Assert-True ((Invoke-DefenderTrace).Status -eq 'realtime' -and $script:TraceCalls -eq 0) 'Missing event triggered a performance trace.'
 }
 Case 'unattributed CPU is not diagnosed as a driver' {
     $culprit = Get-TrapCulprit @{ total = 95; attributed = 10; top = @(@{ name = 'demo.exe'; pct = 8 }) }
