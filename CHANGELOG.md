@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0 — unreleased
+## 2.3.0 — 2026-10-17
 
 This release joins the two lines of development. The 2.2 features were built
 locally on top of 2.1.1 and never published (they are kept on branch
