@@ -187,6 +187,8 @@ $script:Strings = @{
         reportRecent     = 'Sıçramalar'
         diag_defender_scan = 'Sıçramaların %{0} kadarı Defender taramasından. Zamanlanmış ve elle başlatılan taramaları bilgisayarı kullanmadığınız saatlere alın.'
         diag_defender_rt = 'Sıçramaların %{0} kadarı Defender''ın gerçek zamanlı taramasından; en çok taranan klasör: {2}. Güvendiğiniz bir çalışma klasörüyse yalnızca o klasör için dar bir istisna düşünün.'
+        diag_drivers     = 'Sıçramaların %{0} kadarında yük ölçülmüş kesme/DPC süresi: sürücü kaynaklı. Ekran kartı, ağ ve ses sürücülerini güncelleyin; LatencyMon ile hangi sürücü olduğunu doğrulayın.'
+        trapDpc          = 'Sürücüler (ölçülmüş kesme/DPC)'
         diag_unattributed = 'Sıçramaların %{0} kadarında yük kaydedilen hiçbir sürece ait değil: kesmeler/DPC (sürücüler) ya da hemen kapanan süreçler olabilir. Sürücüden şüpheleniyorsanız LatencyMon ile doğrulayın.'
         diag_game        = 'Sıçramaların %{0} kadarı oyunlardan ({1}); oyun sırasında beklenen bir yük.'
         diag_devtools    = 'Sıçramaların %{0} kadarı geliştirici/AI araçlarından ({1}). Ağır derleme ve ajan görevlerini zamanlayın veya paralel iş sayısını sınırlayın; hangi betik olduğunu görmek için komut satırı kaydını açın.'
@@ -369,6 +371,8 @@ $script:Strings = @{
         reportRecent     = 'Spikes'
         diag_defender_scan = 'Defender scans cause about {0}% of the spikes. Move scheduled and manual scans to hours when the PC is idle.'
         diag_defender_rt = 'About {0}% come from Defender''s real-time scanning; most-scanned folder: {2}. If you trust that working folder, consider a narrow exclusion for it alone.'
+        diag_drivers     = 'In about {0}% the load is measured interrupt/DPC time: a driver. Update graphics, network and audio drivers; confirm which one with LatencyMon.'
+        trapDpc          = 'Drivers (measured interrupt/DPC)'
         diag_unattributed = 'In about {0}% the load belongs to no recorded process: interrupts/DPC (drivers) or processes that exited at once. If you suspect a driver, confirm with LatencyMon.'
         diag_game        = 'About {0}% come from games ({1}) - expected while playing.'
         diag_devtools    = 'About {0}% come from developer/AI tools ({1}). Schedule heavy builds and agent jobs or limit their parallelism; turn on command-line recording to see which script it is.'
@@ -2057,7 +2061,7 @@ $btnTrapPageRecords.add_Click($script:TrapPageClick)
 Show-TrapPage 'summary'
 
 $script:TrapDiagColors = @{
-    defender = '#F59E0B'; unattributed = '#F87171'; game = '#A78BFA'; devtools = '#38BDF8'
+    defender = '#F59E0B'; unattributed = '#F87171'; drivers = '#FB7185'; game = '#A78BFA'; devtools = '#38BDF8'
     browser = '#34D399'; windows = '#94A3B8'; scheduled = '#FBBF24'; other = '#CBD5E1'
 }
 

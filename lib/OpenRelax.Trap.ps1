@@ -76,6 +76,16 @@ function Get-TrapEpisodes {
 # process accounts for (exited/unreadable processes or interrupts/DPCs) outweighs it.
 function Get-TrapCulprit($Start) {
     $top = @($Start.top | Where-Object { $_ })
+    # Embedded records (2.4+) measure interrupt and DPC time: a share of at
+    # least 10 % that outweighs the top process is driver load, with evidence.
+    $driver = 0.0
+    foreach ($field in 'dpc','interrupt') {
+        $has = if ($Start -is [System.Collections.IDictionary]) { $Start.Contains($field) } else { [bool]$Start.PSObject.Properties[$field] }
+        if ($has) { $driver += [double]$Start.$field }
+    }
+    $topPct = 0.0
+    if ($top.Count) { $topPct = [double]$top[0].pct }
+    if ($driver -ge 10 -and $driver -ge $topPct) { return @{ Name = '*dpc*'; Pct = $driver } }
     $unattributed = [double]$Start.total - [double]$Start.attributed
     if ($top.Count -eq 0 -or $unattributed -gt [double]$top[0].pct) {
         return @{ Name = '*unattributed*'; Pct = [Math]::Max(0, $unattributed) }
@@ -104,6 +114,7 @@ function ConvertFrom-TrapTime([string]$Iso) {
 # Display name of a culprit. Unattributed CPU (interrupts/DPC, exited or
 # unreadable processes) was recorded as '*drivers*' before 2.3.
 function Get-TrapCulpritText([string]$Name) {
+    if ($Name -eq '*dpc*') { return (T 'trapDpc') }
     if ($Name -in @('*drivers*','*unattributed*')) { return (T 'trapDrivers') }
     return $Name
 }
@@ -159,7 +170,9 @@ function Get-TrapDiagnosis {
     $groups = @{}; $scheduled = @{}; $scheduledCount = 0; $defScan = 0; $defFolder = ''
     foreach ($ep in $Episodes) {
         $c = Get-TrapCulprit $ep.Start
-        if ($c.Name -in @('*unattributed*','*drivers*')) { $cat = 'unattributed' } else { $cat = Get-TrapCategory $c.Name }
+        if ($c.Name -eq '*dpc*') { $cat = 'drivers' }
+        elseif ($c.Name -in @('*unattributed*','*drivers*')) { $cat = 'unattributed' }
+        else { $cat = Get-TrapCategory $c.Name }
         if (-not $groups.ContainsKey($cat)) { $groups[$cat] = @{ Count = 0; Names = @{} } }
         $groups[$cat].Count++
         $groups[$cat].Names[$c.Name] = 1 + [int]$groups[$cat].Names[$c.Name]

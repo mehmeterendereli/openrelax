@@ -281,6 +281,23 @@ Case '2.2.1 records with parentCmd and *drivers* still diagnose' {
     Assert-True (@($d | Where-Object { $_.Category -eq 'unattributed' }).Count -eq 1 -and @($d | Where-Object { $_.Category -eq 'unattributed' })[0].Count -eq 2) (($d | ForEach-Object { '{0}:{1}' -f $_.Category, $_.Count }) -join ' ')
     Assert-True ((Get-TrapCulpritText '*drivers*') -eq (Get-TrapCulpritText '*unattributed*')) 'Legacy and new unattributed names read differently.'
 }
+Case 'measured DPC load is diagnosed as drivers' {
+    $start = [pscustomobject]@{ t = '2026-10-04T10:00:00'; kind = 'start'; total = 95; attributed = 30; dpc = 20; interrupt = 5; defender = $null
+        top = @([pscustomobject]@{ name = 'x.exe'; pct = 15; parent = ''; scheduled = $false }) }
+    $c = Get-TrapCulprit $start
+    Assert-True ($c.Name -eq '*dpc*' -and $c.Pct -eq 25) "Culprit: $($c.Name) $($c.Pct)"
+    $eps = New-Object System.Collections.Generic.List[object]; $eps.Add(@{ Start = $start; Defender = $null })
+    $d = @(Get-TrapDiagnosis $eps)
+    Assert-True ($d[0].Category -eq 'drivers' -and $d[0].Key -eq 'diag_drivers') ('Finding: ' + $d[0].Category)
+    Assert-True ((Get-TrapCulpritText '*dpc*') -match '^trapDpc') 'The measured driver culprit has no own text.'
+}
+Case 'small or unmeasured DPC load does not become a driver finding' {
+    $small = [pscustomobject]@{ t = '2026-10-04T10:00:00'; kind = 'start'; total = 95; attributed = 85; dpc = 6; interrupt = 2
+        top = @([pscustomobject]@{ name = 'x.exe'; pct = 70 }) }
+    Assert-True ((Get-TrapCulprit $small).Name -eq 'x.exe') 'A small DPC share displaced the top process.'
+    $legacy = @{ total = 95; attributed = 10; top = @(@{ name = 'demo.exe'; pct = 8 }) }
+    Assert-True ((Get-TrapCulprit $legacy).Name -eq '*unattributed*') 'A record without dpc was called a driver.'
+}
 Case 'hour histogram has 24 buckets counting starts' {
     $h = Get-TrapHourHistogram $diagEpisodes
     Assert-True ($h.Count -eq 24 -and $h[0] -eq 1 -and $h[15] -eq 3 -and (($h | Measure-Object -Sum).Sum) -eq 10) ($h -join ',')
