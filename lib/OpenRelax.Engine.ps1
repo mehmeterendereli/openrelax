@@ -386,31 +386,64 @@ function Invoke-WindowsUpdateCacheCleanup {
     }
 }
 
-# Trims process working sets via EmptyWorkingSet. Skips critical system
-# processes; the reclaimed number is transient by nature (pages return on use).
-function Invoke-RamTrim {
-    if ($env:OPENRELAX_FIXTURE_ROOT) { return @{ Success = 0; Fail = 0; Saved = 0 } }
-    $skip = @('csrss', 'wininit', 'winlogon', 'lsass', 'services', 'smss', 'dwm',
-              'fontdrvhost', 'Memory Compression', 'Registry', 'System', 'Idle', 'vmmem')
-    $before = [Win32Helper]::GetMemoryStatus().ullAvailPhys
-    $ok = 0; $fail = 0
-    foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
-        if ($proc.Id -eq $PID) { continue }
-        if ($skip -contains $proc.ProcessName) { continue }
-        try {
-            $h = $proc.Handle
-            if ($h -ne [IntPtr]::Zero) {
-                if ([Win32Helper]::EmptyWorkingSet($h)) { $ok++ } else { $fail++ }
-            }
-        } catch {
-            $fail++
-        } finally {
-            $proc.Dispose()
+# Which processes to trim: never critical ones or ourselves, never the
+# foreground app (a game, a call), never one busy during the sample (trimming
+# it only buys page faults), and only those holding enough memory to matter.
+function Select-TrimTargets {
+    param($Processes, [int]$ForegroundPid, [hashtable]$CpuBefore, [hashtable]$CpuAfter, [double]$IntervalMs, [int]$CpuCount, [int]$SelfPid)
+    $critical = @('csrss', 'wininit', 'winlogon', 'lsass', 'services', 'smss', 'dwm', 'fontdrvhost',
+                  'Memory Compression', 'Registry', 'System', 'Idle', 'vmmem', 'audiodg')
+    $targets = New-Object 'System.Collections.Generic.List[int]'
+    foreach ($p in $Processes) {
+        if ($p.Id -eq $SelfPid -or $p.Id -eq $ForegroundPid) { continue }
+        if ($critical -contains $p.Name) { continue }
+        if ([long]$p.WorkingSet -lt 30MB) { continue }
+        if ($IntervalMs -gt 0 -and $CpuBefore.ContainsKey($p.Id) -and $CpuAfter.ContainsKey($p.Id)) {
+            $pct = ($CpuAfter[$p.Id] - $CpuBefore[$p.Id]) / $IntervalMs / [Math]::Max(1, $CpuCount) * 100
+            if ($pct -ge 1) { continue }
         }
+        $targets.Add([int]$p.Id)
+    }
+    return , $targets
+}
+
+# Trims the working sets Select-TrimTargets picks from a 500 ms CPU sample.
+# The measured change in available memory is signed and transient by nature:
+# pages return as the processes touch them again, and other programs allocate
+# meanwhile. -DryRun only reports what would be trimmed.
+function Invoke-RamTrim {
+    param([switch]$DryRun)
+    if ($env:OPENRELAX_FIXTURE_ROOT) { return @{ Success = 0; Fail = 0; Saved = [long]0; Skipped = 0 } }
+    $before = [Win32Helper]::GetMemoryStatus().ullAvailPhys
+    $fg = [int][Win32Helper]::GetForegroundProcessId()
+    $cpu1 = @{}
+    foreach ($p in [System.Diagnostics.Process]::GetProcesses()) {
+        try { $cpu1[$p.Id] = $p.TotalProcessorTime.TotalMilliseconds } catch {} finally { $p.Dispose() }
+    }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Start-Sleep -Milliseconds 500
+    $cpu2 = @{}
+    $procs = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($p in [System.Diagnostics.Process]::GetProcesses()) {
+        try {
+            $cpu2[$p.Id] = $p.TotalProcessorTime.TotalMilliseconds
+            $procs.Add(@{ Id = $p.Id; Name = $p.ProcessName; WorkingSet = $p.WorkingSet64 })
+        } catch {
+            # not readable (protected or exited): not a candidate
+        } finally { $p.Dispose() }
+    }
+    $targets = Select-TrimTargets -Processes $procs -ForegroundPid $fg -CpuBefore $cpu1 -CpuAfter $cpu2 `
+        -IntervalMs $sw.Elapsed.TotalMilliseconds -CpuCount ([Environment]::ProcessorCount) -SelfPid $PID
+    $skipped = $procs.Count - $targets.Count
+    if ($DryRun) { return @{ Success = 0; Fail = 0; Saved = [long]0; Skipped = $skipped; Targets = $targets.ToArray() } }
+    $ok = 0; $fail = 0
+    foreach ($id in $targets) {
+        try {
+            $proc = [System.Diagnostics.Process]::GetProcessById($id)
+            try { if ([Win32Helper]::EmptyWorkingSet($proc.Handle)) { $ok++ } else { $fail++ } } finally { $proc.Dispose() }
+        } catch { $fail++ }
     }
     Start-Sleep -Milliseconds 300
     $after = [Win32Helper]::GetMemoryStatus().ullAvailPhys
-    $saved = [long]0
-    $saved = [long]$after - [long]$before
-    return @{ Success = $ok; Fail = $fail; Saved = $saved }
+    return @{ Success = $ok; Fail = $fail; Saved = ([long]$after - [long]$before); Skipped = $skipped }
 }

@@ -190,6 +190,7 @@ $script:Strings = @{
         logRamStart      = 'Bellek (RAM) optimizasyonu başlatıldı...'
         logRamDone       = 'RAM boşaltıldı: {0} geçici olarak geri kazanıldı.'
         logRamNone       = 'Ölçülen net kullanılabilir bellek değişimi yok.'
+        logRamSkipped    = 'Ön plandaki uygulama, o an çalışan ve küçük süreçler dahil {0} süreç daraltılmadı.'
         logRecycleDone   = 'Geri Dönüşüm Kutusu boşaltıldı.'
         logDnsDone       = 'DNS önbelleği temizlendi.'
         logAllDone       = 'Tüm bakım işlemleri tamamlandı!'
@@ -341,6 +342,7 @@ $script:Strings = @{
         logRamStart      = 'RAM optimization started...'
         logRamDone       = 'RAM trimmed: {0} temporarily reclaimed.'
         logRamNone       = 'No net change in measured available memory.'
+        logRamSkipped    = '{0} processes were left alone (the foreground app, busy and small processes).'
         logRecycleDone   = 'Recycle Bin emptied.'
         logDnsDone       = 'DNS cache flushed.'
         logAllDone       = 'All maintenance tasks finished!'
@@ -381,7 +383,7 @@ function T {
 # Serialized engine source, injected into every background runspace so the
 # worker and the UI share a single implementation.
 $script:EngineCode = ''
-foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Test-PathWithin', 'Assert-NoReparseAncestors', 'Assert-CleanupPath', 'Get-SafeTreeEntries', 'Invoke-JunkWalk', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Wait-ServiceState', 'Invoke-WindowsUpdateCacheCleanup', 'Invoke-RamTrim', 'Invoke-Maintenance') {
+foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Test-PathWithin', 'Assert-NoReparseAncestors', 'Assert-CleanupPath', 'Get-SafeTreeEntries', 'Invoke-JunkWalk', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Wait-ServiceState', 'Invoke-WindowsUpdateCacheCleanup', 'Select-TrimTargets', 'Invoke-RamTrim', 'Invoke-Maintenance') {
     $script:EngineCode += "function $fnName {`n" + (Get-Command $fnName).Definition + "`n}`n"
 }
 #endregion
@@ -825,6 +827,19 @@ if (-not ([System.Management.Automation.PSTypeName]'Win32Helper').Type) {
 
         public static TimeSpan GetSystemUptime() {
             return TimeSpan.FromMilliseconds(GetTickCount64());
+        }
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        // The app the user is looking at (a game, a call): RAM trimming leaves it alone.
+        public static uint GetForegroundProcessId() {
+            uint pid;
+            GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+            return pid;
         }
     }
 "@
@@ -2285,6 +2300,7 @@ function Complete-Clean {
     Write-Log ([string]::Format((T 'logMaintenanceResult'), $r.Status, $r.Count, (Format-Bytes ([long]$r.Bytes)), $r.Skipped, $r.Errors.Count)) $level
     foreach ($maintenanceError in $r.Errors) { Write-Log $maintenanceError 'error' }
     if ($r.Ram) { Write-Log ([string]::Format((T 'logRamResult'), (Format-Bytes ([long]$r.Ram.Saved)), $r.Ram.Success, $r.Ram.Fail)) 'info' }
+    if ($r.Ram -and $r.Ram.Skipped) { Write-Log ([string]::Format((T 'logRamSkipped'), $r.Ram.Skipped)) 'info' }
     if (-not $script:ExitRequested) {
         Start-EngineTask $script:ScanTaskCode @{ IsAdmin = $script:IsAdmin }
         $lblJunkVal.Text = (T 'calculating')
@@ -2294,6 +2310,7 @@ function Complete-Clean {
 function Complete-Ram {
     param($r)
     Write-Log ([string]::Format((T 'logRamResult'), (Format-Bytes ([long]$r.Saved)), $r.Success, $r.Fail)) 'info'
+    if ($r.Skipped) { Write-Log ([string]::Format((T 'logRamSkipped'), $r.Skipped)) 'info' }
     $script:Sync.Busy = $false
     Update-Status
 }
