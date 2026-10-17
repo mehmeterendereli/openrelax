@@ -16,13 +16,12 @@ function Read-SharedText([string]$Path) {
 # Records of the last $Days days, oldest first. Parsed files are cached by
 # length, so a refresh with no new spikes costs a stat call per file.
 function Read-TrapRecords {
-    # -LegacyDir: a 2.2.x trap wrote to its root until an install moves the
-    # files into logs\; its records are older, so they are read first.
-    param([string]$Dir = $script:TrapDir, [int]$Days = 7, [string]$LegacyDir = '')
+    # -LegacyDir: folders of the former SYSTEM recorder (2.3 logs\, 2.2.x root);
+    # their records are older, so they are read first.
+    param([string]$Dir = $script:TrapDir, [int]$Days = 7, [string[]]$LegacyDir = @())
     $cutoff = (Get-Date).AddDays(-$Days).ToString('s')
     $all = New-Object System.Collections.Generic.List[object]
-    $dirs = @($Dir)
-    if ($LegacyDir -and -not $LegacyDir.TrimEnd('\').Equals($Dir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { $dirs = @($LegacyDir, $Dir) }
+    $dirs = @(@($LegacyDir | Where-Object { $_ -and -not $_.TrimEnd('\').Equals($Dir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) }) + $Dir)
     foreach ($month in @((Get-Date).AddMonths(-1), (Get-Date))) { foreach ($monthDir in $dirs) {
         $path = Join-Path $monthDir ('spikes-{0:yyyy-MM}.jsonl' -f $month)
         if (-not (Test-Path -LiteralPath $path)) { continue }

@@ -20,6 +20,7 @@ Case 'safe defaults and strict settings types' {
     foreach ($key in 'recycle','wu','shader','wer','gpusetup','devcache') { Assert-True (-not $defaults.categories[$key]) "Unsafe default: $key" }
     Assert-True (-not $defaults.trapRecordCommandLines) 'Command-line recording is on by default.'
     Assert-True ($defaults.trapNotify -eq $true) 'Spike notifications are off by default.'
+    Assert-True ($defaults.trapEnabled -eq $true) 'The embedded spike recorder is off by default.'
     $path = Join-Path $Work 'settings.json'
     Write-SettingsAtomic $defaults $path
     Assert-True (Read-SettingsDocument $path).Valid 'Valid settings rejected.'
@@ -35,7 +36,7 @@ Case 'safe defaults and strict settings types' {
     $legacy = Get-DefaultSettings; $legacy.Remove('schemaVersion'); $legacy.Remove('trimRam'); $legacy.Remove('clearDns'); Write-SettingsAtomic $legacy $path
     $loaded = Read-SettingsDocument $path; Assert-True ($loaded.Valid -and -not $loaded.Settings.trimRam -and -not $loaded.Settings.clearDns) 'Legacy migration changed opt-in defaults.'
     $defaults = Get-DefaultSettings; $defaults.categories.devcache = 'false'; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) 'String devcache accepted.'
-    foreach ($key in 'trapNotify','trapRecordCommandLines') { $defaults = Get-DefaultSettings; $defaults[$key] = 1; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) "Non-boolean $key accepted." }
+    foreach ($key in 'trapNotify','trapRecordCommandLines','trapEnabled') { $defaults = Get-DefaultSettings; $defaults[$key] = 1; Write-SettingsAtomic $defaults $path; Assert-True (-not (Read-SettingsDocument $path).Valid) "Non-boolean $key accepted." }
     $defaults = Get-DefaultSettings; $defaults.categories.Remove('recycle')
     Write-SettingsAtomic $defaults $path
     Assert-True (-not (Read-SettingsDocument $path).Valid) 'Missing category accepted.'
@@ -50,7 +51,7 @@ Case 'a 2.2.1 settings file migrates with preferences and statistics' {
     Assert-True ($loaded.Settings.autoBoostLimit -eq 80 -and $loaded.Settings.autoBoost -and $loaded.Settings.runAtStartup) 'Preferences were lost.'
     Assert-True ($loaded.Settings.stats.totalCleanedBytes -eq 9421688750 -and $loaded.Settings.stats.totalRuns -eq 14) 'Statistics were lost.'
     Assert-True ($loaded.Settings.categories.recycle -eq $true -and $loaded.Settings.categories.devcache -eq $false) 'Category choices were changed.'
-    Assert-True ($loaded.Settings.trapNotify -eq $true -and $loaded.Settings.trapRecordCommandLines -eq $false) 'Fotokapan preferences were changed.'
+    Assert-True ($loaded.Settings.trapNotify -eq $true -and $loaded.Settings.trapRecordCommandLines -eq $false -and $loaded.Settings.trapEnabled -eq $true) 'Fotokapan preferences were changed.'
 }
 Case 'atomic save preserves the old file after replace failure' {
     $path = Join-Path $Work 'atomic.json'

@@ -4,7 +4,7 @@ function Get-DefaultSettings {
         schemaVersion = 3; language = 'tr'; autoBoost = $false; autoBoostLimit = 85
         closeToTray = $true; runAtStartup = $false; weeklyClean = $false
         trimRam = $false; clearDns = $false
-        trapNotify = $true; trapRecordCommandLines = $false
+        trapNotify = $true; trapRecordCommandLines = $false; trapEnabled = $true
         categories = @{ temp = $true; browser = $true; discord = $true; shader = $false; wer = $false; wu = $false; gpusetup = $false; devcache = $false; recycle = $false }
         stats = @{ totalCleanedBytes = [long]0; totalRuns = 0; lastClean = '' }
     }
@@ -35,7 +35,7 @@ function Read-SettingsDocument {
             if ($document.categories.$key -isnot [bool]) { throw "Invalid category: $key" }
             $result.Settings.categories[$key] = $document.categories.$key
         }
-        foreach ($key in 'trimRam','clearDns','trapNotify','trapRecordCommandLines') {
+        foreach ($key in 'trimRam','clearDns','trapNotify','trapRecordCommandLines','trapEnabled') {
             if ($document.PSObject.Properties[$key]) {
                 if ($document.$key -isnot [bool]) { throw "Invalid boolean: $key" }
                 $result.Settings[$key] = $document.$key

@@ -16,7 +16,7 @@ try {
         if ($source.Name -eq 'openrelax.ps1') { $appAst = $ast }
     }
     $workers = @{}
-    foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode') {
+    foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode','TrapSamplerCode') {
         $assignment = $appAst.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq ('$script:' + $name)},$true)
         $literal = $assignment.Right.Find({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst]},$true)
         Assert ($null -ne $literal) "Worker source missing: $name"
@@ -25,7 +25,7 @@ try {
         Assert ($errors.Count -eq 0) "Worker parser errors: $name"
         $workers[$name] = $literal.Value
     }
-    Write-Host "Parser OK: $($sources.Count) source/test files and 4 workers."
+    Write-Host "Parser OK: $($sources.Count) source/test files and 5 workers."
     # Bounded children run pure contracts/unit cases and small owned synthetic file fixtures.
     foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts'),@('unit.ps1','unit','Unit tests'))) {
         $contractInfo = [Diagnostics.ProcessStartInfo]::new()

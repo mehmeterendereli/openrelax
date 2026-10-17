@@ -458,6 +458,31 @@ Case 'clean worker exposes live progress and always clears it' {
         Assert-True ($sync.Cleaning -eq $false -and $null -ne $sync.CleanResult) 'Progress stayed on after the worker ended.'
     }
 }
+Case 'the sampler worker records a synthetic spike and stops on request' {
+    $dir = Join-Path $Work 'sampler-worker'
+    $sync = [hashtable]::Synchronized(@{ TrapStop = $false; TrapBeat = $null; TrapError = ''; TrapRecordCmd = $false })
+    # One busy thread is far above a 1 % threshold on any machine.
+    $burner = [powershell]::Create(); [void]$burner.AddScript('$end = [DateTime]::UtcNow.AddSeconds(14); while ([DateTime]::UtcNow -lt $end) { $x = 1 }')
+    $burnHandle = $burner.BeginInvoke()
+    $ps = [powershell]::Create()
+    try {
+        [void]$ps.AddScript((Get-TestFunctionSource @('Read-ProcessCpuSample','Measure-ProcessCpu','New-SpikeTracker','Step-SpikeTracker','Round-Share','New-SpikeRecord','Add-TrapRecord','Set-TrapHeartbeat','Protect-CommandLine','Test-ScheduledParent')))
+        [void]$ps.AddStatement().AddScript((Get-WorkerSource 'TrapSamplerCode')).AddArgument($sync).AddArgument(@{ Dir = $dir; Threshold = 1; SustainSec = 2; IntervalSec = 1; Version = 'test' })
+        $handle = $ps.BeginInvoke()
+        Start-Sleep -Seconds 9
+        $sync.TrapStop = $true
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        Assert-True ($handle.AsyncWaitHandle.WaitOne(3000)) 'The sampler did not stop within 3 s.'
+        [void]$ps.EndInvoke($handle)
+        Assert-True (-not $ps.HadErrors -and -not $sync.TrapError) ('Sampler errors: ' + ($ps.Streams.Error -join '; ') + $sync.TrapError)
+    } finally { $ps.Dispose(); [void]$burner.EndInvoke($burnHandle); $burner.Dispose() }
+    $records = @(Get-Content -LiteralPath (Get-ChildItem -LiteralPath $dir -Filter 'spikes-*.jsonl').FullName | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+    $kinds = @($records | ForEach-Object { $_.kind })
+    Assert-True ($kinds[0] -eq 'monitor' -and $kinds -contains 'start' -and $kinds[$kinds.Count - 1] -eq 'end') ('Kinds: ' + ($kinds -join ','))
+    $start = @($records | Where-Object { $_.kind -eq 'start' })[0]
+    Assert-True ($start.PSObject.Properties['dpc'] -and @($start.top).Count -ge 1 -and $start.top[0].name -like '*.exe') 'The start record lacks the embedded fields.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $dir 'durum.json') -Raw | ConvertFrom-Json).mode -eq 'embedded') 'No embedded heartbeat was written.'
+}
 Case 'disk walk reports root files and per-folder totals' {
     $disk = Join-Path $Work 'disk'
     New-OldFile (Join-Path $disk 'a\x.bin') 100; New-OldFile (Join-Path $disk 'a\deep\y.bin') 50
