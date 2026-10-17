@@ -2,16 +2,17 @@
 
 ## Yol haritası (2026-10-17)
 
-Tasarım: [docs/superpowers/specs/2026-10-17-openrelax-roadmap-design.md](docs/superpowers/specs/2026-10-17-openrelax-roadmap-design.md).
-2.3.0 uygulama planı: [docs/superpowers/plans/2026-10-17-openrelax-2.3.md](docs/superpowers/plans/2026-10-17-openrelax-2.3.md).
+Tasarımlar: [ilk yol haritası](docs/superpowers/specs/2026-10-17-openrelax-roadmap-design.md),
+[AI (MCP) ve büyüme planı](docs/superpowers/specs/2026-10-17-openrelax-ai-growth-design.md) — sırayı bu ikincisi belirler.
+Uygulama planları: [2.3.0](docs/superpowers/plans/2026-10-17-openrelax-2.3.md), [2.4.0](docs/superpowers/plans/2026-10-17-openrelax-2.4.md).
 
 | Sürüm | İçerik | Durum |
 | --- | --- | --- |
-| 2.3.0 | Yayınlanmamış 2.2 hattının (`archive/local-2.2.1`) bu ana hatta taşınması: tek geçişli korumalı walker, canlı ilerleme, disk analizi, geliştirici önbellekleri, RAM hedef seçimi, Fotokapan teşhisi/kayıtları/raporu/bildirimi, isteğe bağlı maskeli komut satırı, 2.2 kayıt göçü | Kod ve yerel kabul tamamlandı; PR ve CI bekliyor |
-| 2.4 | Dağıtım: `%LOCALAPPDATA%` kurulumu, başlangıç/görev yolu onarımı, Release zip + SHA256, Scoop, güncelleme bildirimi, toast | Planlandı |
-| 2.5 | Fotokapan: arayüzden eşik, betik içgörüsü, disk/bellek/GPU sıçramaları, Olay Günlüğü korelasyonu, trend grafiği, CSV, saklama süresi | Planlandı |
-| 2.6 | Temizlik: önizleme, hariç tutma listesi, yeni hedefler, ayrıntılı geçmiş, CLI | Planlandı |
-| 2.7 | Sistem sağlığı sekmesi: başlangıç programları, disk sağlığı, pil, büyük dosyalar, rapor | Planlandı |
+| 2.3.0 | Yayınlanmamış 2.2 hattının (`archive/local-2.2.1`) bu ana hatta taşınması | Yayınlandı (v2.3.0) |
+| 2.4.0 | OpenRelax'ın içinde, yönetici gerektirmeyen Fotokapan (PDH örnekleyici, ölçülmüş kesme/DPC), eski SYSTEM görevinin kaldırılması, yol onarımı, ölçülmüş tüketim, `irm \| iex` kurulum, release zip + SHA256, Scoop | Kod ve yerel kabul tamamlandı; PR ve CI bekliyor |
+| 2.5 | MCP sunucusu (`openrelax-mcp.ps1`), "AI asistanına bağla", uygulama içi "Neden yavaş?" özeti, MCP Registry ve awesome-list başvuruları | Planlandı |
+| Lansman | README/GIF/yazı, HN + Reddit + Türkçe topluluklar takvimi | 2.5 ile paralel hazırlanır |
+| 2.6+ | Temizlik genişletme ve sistem sağlığı sekmesi; öncelik lansman geri bildirimine göre | Planlandı |
 
 ## 2.1 Preview sağlamlaştırma planı (tamamlandı)
 

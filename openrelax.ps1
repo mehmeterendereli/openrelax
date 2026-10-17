@@ -1,4 +1,4 @@
-﻿# OpenRelax PC Care v2.3.0 - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care v2.4.0 - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
 #                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
@@ -17,7 +17,7 @@ param(
 if ($AutoClean -and $SelfTest) { throw 'AutoClean and SelfTest cannot be combined.' }
 if (($VisualReportDir -or $UiAcceptanceReportDir -or $ExitDuringWorkerTest) -and ($AutoClean -or $SelfTest)) { throw 'GUI test reports require GUI mode.' }
 
-$script:AppVersion   = '2.3.0'
+$script:AppVersion   = '2.4.0'
 $script:AppEdition   = ''   # 'Preview' or similar for pre-release builds
 $script:ScriptPath   = $PSCommandPath
 $script:TestMode = [bool]$TestMode

@@ -132,16 +132,16 @@ jobs:
           $archiveRecord = $null
           if ($passed) {
             if ($captures.Count -ne 8) { throw 'Passing visual run must have all eight captures.' }
-            $archiveName = 'OpenRelax-2.3.0-' + $checkedOutCommit.Substring(0,12) + '-source.zip'
+            $archiveName = 'OpenRelax-2.4.0-' + $checkedOutCommit.Substring(0,12) + '-source.zip'
             $archivePath = Join-Path $destination $archiveName
-            git archive --format=zip --prefix=OpenRelax-2.3.0/ --output=$archivePath HEAD
+            git archive --format=zip --prefix=OpenRelax-2.4.0/ --output=$archivePath HEAD
             if ($LASTEXITCODE -ne 0) { throw 'Source archive creation failed.' }
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
             try {
               $names = @($archive.Entries | ForEach-Object { $_.FullName })
               foreach ($required in 'openrelax.ps1','fotokapan.ps1','lib/OpenRelax.Core.ps1','lib/OpenRelax.Engine.ps1','lib/OpenRelax.Trap.ps1','lib/OpenRelax.Sampler.ps1','launch.bat','install.ps1','install-shortcut.ps1','docs/openrelax.ico','README.md','LICENSE') {
-                if (('OpenRelax-2.3.0/' + $required) -notin $names) { throw ('Incomplete source archive: ' + $required) }
+                if (('OpenRelax-2.4.0/' + $required) -notin $names) { throw ('Incomplete source archive: ' + $required) }
               }
               if (@($names | Where-Object { $_ -match '(^|/)(\.git/|\.env($|[./])|settings\.json$|autoclean\.log$|durum\.json$|spikes-.*\.jsonl$)' }).Count) { throw 'Unexpected runtime or private file in source archive.' }
             } finally { $archive.Dispose() }
