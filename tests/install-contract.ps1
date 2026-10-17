@@ -90,6 +90,17 @@ Case 'a folder that is not an OpenRelax install is never replaced' {
     Assert-True ($r.ExitCode -ne 0) 'A foreign folder was accepted as the destination.'
     Assert-True ([IO.File]::ReadAllText((Join-Path $dest 'notes.txt')) -eq 'keep me' -and -not (Test-Path -LiteralPath (Join-Path $dest 'openrelax.ps1'))) 'A foreign folder was changed.'
 }
+Case 'the installer runs under irm | iex' {
+    $text = [IO.File]::ReadAllText((Join-Path $repo 'install.ps1'))
+    # -cmatch: a case-insensitive class also matches ASCII 'k' (Kelvin sign folding).
+    Assert-True ($text[0] -ne [char]0xFEFF -and -not ($text -cmatch '[^\x00-\x7F]')) 'install.ps1 must be plain ASCII without a BOM.'
+    [void][scriptblock]::Create($text)
+    $tokens = $null; $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors)
+    Assert-True ($errors.Count -eq 0) 'install.ps1 does not parse.'
+    $exits = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.ExitStatementAst] }, $true))
+    Assert-True ($exits.Count -eq 0) "install.ps1 uses 'exit', which would close the caller's window under iex."
+}
 Case 'the Scoop manifest points at the verified release asset' {
     $manifest = Get-Content -LiteralPath (Join-Path $repo 'bucket\openrelax.json') -Raw | ConvertFrom-Json
     foreach ($field in 'version','url','hash','extract_dir','shortcuts','checkver','autoupdate','license','homepage','description') {

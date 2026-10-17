@@ -27,7 +27,7 @@ try {
     }
     Write-Host "Parser OK: $($sources.Count) source/test files and 5 workers."
     # Bounded children run pure contracts/unit cases and small owned synthetic file fixtures.
-    foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts'),@('unit.ps1','unit','Unit tests'))) {
+    foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts'),@('unit.ps1','unit','Unit tests'),@('install-contract.ps1','install','Install contracts'))) {
         $contractInfo = [Diagnostics.ProcessStartInfo]::new()
         $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot $suite[0]) + '" -Work "' + (Join-Path $Work $suite[1]) + '" -KeepArtifacts'
