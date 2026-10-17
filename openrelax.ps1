@@ -1,4 +1,4 @@
-﻿# OpenRelax PC Care v2.3.0 - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care v2.4.0 - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
 #                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
@@ -17,7 +17,7 @@ param(
 if ($AutoClean -and $SelfTest) { throw 'AutoClean and SelfTest cannot be combined.' }
 if (($VisualReportDir -or $UiAcceptanceReportDir -or $ExitDuringWorkerTest) -and ($AutoClean -or $SelfTest)) { throw 'GUI test reports require GUI mode.' }
 
-$script:AppVersion   = '2.3.0'
+$script:AppVersion   = '2.4.0'
 $script:AppEdition   = ''   # 'Preview' or similar for pre-release builds
 $script:ScriptPath   = $PSCommandPath
 $script:TestMode = [bool]$TestMode
@@ -53,6 +53,7 @@ $script:IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.Wind
 . (Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1')
 . (Join-Path $PSScriptRoot 'lib\OpenRelax.Engine.ps1')
 . (Join-Path $PSScriptRoot 'lib\OpenRelax.Trap.ps1')
+. (Join-Path $PSScriptRoot 'lib\OpenRelax.Sampler.ps1')
 $settingsDocument = Read-SettingsDocument $script:SettingsFile
 $script:Settings = $settingsDocument.Settings
 $script:SettingsValid = $settingsDocument.Valid
@@ -70,7 +71,7 @@ $script:Strings = @{
         logExitPending = 'Aktif işlem ve servis geri yüklemesi tamamlanınca çıkılacak.'
         diskIncomplete = 'Analiz tamamlanamadı; erişilemeyen alanlar ve bağlantılar atlandı.'
         diskEmpty = 'Klasör boyutlarını görmek için Analiz Et düğmesini kullanın.'
-        trapEmpty = 'Henüz sıçrama kaydı yok. Kurulduğunda eşik üstü CPU olayları burada görünür.'
+        trapEmpty = 'Henüz sıçrama kaydı yok. Fotokapan açıkken eşik üstü CPU olayları burada görünür.'
         scanFailed = 'Tarama başarısız'
         scanIncomplete = 'Tarama eksik'
         nothingSelected = 'Önce bir bakım işlemi seçin.'
@@ -147,11 +148,20 @@ $script:Strings = @{
         trapStStopped    = 'Durmuş'
         trapStMissing    = 'Kurulu değil'
         trapStUpdate     = 'Güncelleme var'
-        trapDetail       = 'Son kontrol {0} · eşik %{1} · bu açılışta {2} sıçrama'
-        trapDetailNone   = 'Kurulunca CPU %85 üstünde kaldığında sorumluları kaydeder; arayüz kapalıyken de çalışır.'
+        trapDetail       = 'Son kontrol {0} · eşik %{1} · bu oturumda {2} sıçrama'
+        trapDetailNone   = 'Açıkken, OpenRelax çalıştığı sürece CPU %85 üstünde kaldığında sorumluları arka planda kaydeder. Yönetici yetkisi gerekmez.'
+        trapDetailLegacy = 'Eski arka plan görevi (SYSTEM) hâlâ kayıt alıyor; çift kayıt olmasın diye yerleşik kaydedici bekliyor. Eski görevi kaldırınca devralır.'
+        trapStOff        = 'Kapalı'
+        trapStStarting   = 'Başlatılıyor'
+        trapStLegacy     = 'Eski görev çalışıyor'
+        btnTrapOn        = 'Aç'
+        btnTrapOff       = 'Kapat'
+        logTrapOn        = 'Fotokapan açık: CPU sıçramaları arka planda kaydediliyor.'
+        logTrapOff       = 'Fotokapan kapatıldı.'
+        logPathRepaired  = 'Başlangıç kaydı ve haftalık görev bu klasöre yönlendirildi.'
         btnTrapInstall   = 'Kur / Güncelle'
-        btnTrapRemove    = 'Kaldır'
-        btnTrapLog       = 'Log''u aç'
+        btnTrapRemove    = 'Eski görevi kaldır'
+        btnTrapLog       = 'Klasörü aç'
         trapTopTitle     = 'EN SIK SORUMLULAR · SON 7 GÜN'
         trapRecentTitle  = 'SON SIÇRAMALAR'
         colProcess       = 'Süreç'
@@ -174,7 +184,7 @@ $script:Strings = @{
         btnTrapExport    = 'Raporu kaydet'
         optTrapNotify    = 'CPU sıçramalarını bildir'
         optTrapCmd       = 'Komut satırlarını kaydet (maskeli)'
-        logTrapCmdChanged = 'Komut satırı kaydı Fotokapan → Kur / Güncelle ile etkinleşir. Maskeleme her gizli bilgiyi yakalayamaz; kayıtlar yalnızca sizin ve yöneticilerin okuyabildiği klasörde kalır.'
+        logTrapCmdChanged = 'Komut satırı kaydı hemen geçerli. Maskeleme her gizli bilgiyi yakalayamaz; kayıtlar yalnızca sizin profil klasörünüzde kalır.'
         trapBalloonTitle = 'OpenRelax · Fotokapan'
         trapBalloon      = 'CPU sıçraması {0}: {1} (%{2})'
         logTrapReportSaved = 'Rapor kaydedildi: {0}'
@@ -187,6 +197,8 @@ $script:Strings = @{
         reportRecent     = 'Sıçramalar'
         diag_defender_scan = 'Sıçramaların %{0} kadarı Defender taramasından. Zamanlanmış ve elle başlatılan taramaları bilgisayarı kullanmadığınız saatlere alın.'
         diag_defender_rt = 'Sıçramaların %{0} kadarı Defender''ın gerçek zamanlı taramasından; en çok taranan klasör: {2}. Güvendiğiniz bir çalışma klasörüyse yalnızca o klasör için dar bir istisna düşünün.'
+        diag_drivers     = 'Sıçramaların %{0} kadarında yük ölçülmüş kesme/DPC süresi: sürücü kaynaklı. Ekran kartı, ağ ve ses sürücülerini güncelleyin; LatencyMon ile hangi sürücü olduğunu doğrulayın.'
+        trapDpc          = 'Sürücüler (ölçülmüş kesme/DPC)'
         diag_unattributed = 'Sıçramaların %{0} kadarında yük kaydedilen hiçbir sürece ait değil: kesmeler/DPC (sürücüler) ya da hemen kapanan süreçler olabilir. Sürücüden şüpheleniyorsanız LatencyMon ile doğrulayın.'
         diag_game        = 'Sıçramaların %{0} kadarı oyunlardan ({1}); oyun sırasında beklenen bir yük.'
         diag_devtools    = 'Sıçramaların %{0} kadarı geliştirici/AI araçlarından ({1}). Ağır derleme ve ajan görevlerini zamanlayın veya paralel iş sayısını sınırlayın; hangi betik olduğunu görmek için komut satırı kaydını açın.'
@@ -199,7 +211,7 @@ $script:Strings = @{
         trapCut          = 'kesildi'
         trapOngoing      = 'sürüyor'
         trapSec          = '{0} sn'
-        trapConfirmRemove = 'Fotokapan kaldırılsın mı? Kayıtlar silinmez.'
+        trapConfirmRemove = 'Eski Fotokapan arka plan görevi (SYSTEM) kaldırılsın mı? Yönetici onayı istenir; kayıtları silinmez ve okunmaya devam eder.'
         trapNoLog        = 'Henüz fotokapan logu yok.'
         logTrapInstallStart = 'Fotokapan kuruluyor...'
         logTrapRemoveStart  = 'Fotokapan kaldırılıyor...'
@@ -252,7 +264,7 @@ $script:Strings = @{
         logExitPending = 'Exiting after the active operation and service restoration finish.'
         diskIncomplete = 'Analysis incomplete; inaccessible entries and links were skipped.'
         diskEmpty = 'Use Analyze to measure folder sizes.'
-        trapEmpty = 'No spikes recorded yet. After installation, sustained CPU spikes appear here.'
+        trapEmpty = 'No spikes recorded yet. While the Spike Trap is on, sustained CPU spikes appear here.'
         scanFailed = 'Scan failed'
         scanIncomplete = 'Scan incomplete'
         nothingSelected = 'Select a maintenance operation first.'
@@ -329,11 +341,20 @@ $script:Strings = @{
         trapStStopped    = 'Stopped'
         trapStMissing    = 'Not installed'
         trapStUpdate     = 'Update available'
-        trapDetail       = 'Last check {0} · threshold {1}% · {2} spikes since boot'
-        trapDetailNone   = 'Once installed it records the culprits whenever CPU stays above 85%, even with this window closed.'
+        trapDetail       = 'Last check {0} · threshold {1}% · {2} spikes this session'
+        trapDetailNone   = 'When on, it records the culprits in the background whenever CPU stays above 85% while OpenRelax runs. No administrator rights needed.'
+        trapDetailLegacy = 'The old background task (SYSTEM) is still recording; the built-in recorder waits so spikes are not logged twice. Remove the old task and it takes over.'
+        trapStOff        = 'Off'
+        trapStStarting   = 'Starting'
+        trapStLegacy     = 'Old task running'
+        btnTrapOn        = 'Turn on'
+        btnTrapOff       = 'Turn off'
+        logTrapOn        = 'Spike Trap on: CPU spikes are recorded in the background.'
+        logTrapOff       = 'Spike Trap turned off.'
+        logPathRepaired  = 'The startup entry and weekly task now point to this folder.'
         btnTrapInstall   = 'Install / Update'
-        btnTrapRemove    = 'Remove'
-        btnTrapLog       = 'Open log'
+        btnTrapRemove    = 'Remove old task'
+        btnTrapLog       = 'Open folder'
         trapTopTitle     = 'TOP CULPRITS · LAST 7 DAYS'
         trapRecentTitle  = 'RECENT SPIKES'
         colProcess       = 'Process'
@@ -356,7 +377,7 @@ $script:Strings = @{
         btnTrapExport    = 'Save report'
         optTrapNotify    = 'Notify on CPU spikes'
         optTrapCmd       = 'Record command lines (masked)'
-        logTrapCmdChanged = 'Command-line recording takes effect after Spike Trap → Install / Update. Masking cannot catch every secret; records stay in a folder only you and administrators can read.'
+        logTrapCmdChanged = 'Command-line recording applies immediately. Masking cannot catch every secret; records stay in your own profile folder.'
         trapBalloonTitle = 'OpenRelax · Spike Trap'
         trapBalloon      = 'CPU spike at {0}: {1} ({2}%)'
         logTrapReportSaved = 'Report saved: {0}'
@@ -369,6 +390,8 @@ $script:Strings = @{
         reportRecent     = 'Spikes'
         diag_defender_scan = 'Defender scans cause about {0}% of the spikes. Move scheduled and manual scans to hours when the PC is idle.'
         diag_defender_rt = 'About {0}% come from Defender''s real-time scanning; most-scanned folder: {2}. If you trust that working folder, consider a narrow exclusion for it alone.'
+        diag_drivers     = 'In about {0}% the load is measured interrupt/DPC time: a driver. Update graphics, network and audio drivers; confirm which one with LatencyMon.'
+        trapDpc          = 'Drivers (measured interrupt/DPC)'
         diag_unattributed = 'In about {0}% the load belongs to no recorded process: interrupts/DPC (drivers) or processes that exited at once. If you suspect a driver, confirm with LatencyMon.'
         diag_game        = 'About {0}% come from games ({1}) - expected while playing.'
         diag_devtools    = 'About {0}% come from developer/AI tools ({1}). Schedule heavy builds and agent jobs or limit their parallelism; turn on command-line recording to see which script it is.'
@@ -381,7 +404,7 @@ $script:Strings = @{
         trapCut          = 'cut off'
         trapOngoing      = 'ongoing'
         trapSec          = '{0} s'
-        trapConfirmRemove = 'Remove the Spike Trap? Recorded logs are kept.'
+        trapConfirmRemove = 'Remove the old Spike Trap background task (SYSTEM)? Administrator approval is requested; its records are kept and still read.'
         trapNoLog        = 'No Spike Trap log yet.'
         logTrapInstallStart = 'Installing Spike Trap...'
         logTrapRemoveStart  = 'Removing Spike Trap...'
@@ -446,6 +469,11 @@ function T {
 $script:EngineCode = ''
 foreach ($fnName in 'Format-Bytes', 'Get-JunkCategories', 'Test-PathWithin', 'Assert-NoReparseAncestors', 'Assert-CleanupPath', 'Get-SafeTreeEntries', 'Invoke-JunkWalk', 'Measure-JunkPaths', 'Get-RecycleBinInfo', 'Remove-JunkPaths', 'Wait-ServiceState', 'Invoke-WindowsUpdateCacheCleanup', 'Select-TrimTargets', 'Invoke-RamTrim', 'Invoke-Maintenance') {
     $script:EngineCode += "function $fnName {`n" + (Get-Command $fnName).Definition + "`n}`n"
+}
+# The embedded Fotokapan sampler's runspace gets only what it needs.
+$script:SamplerCode = ''
+foreach ($fnName in 'Protect-CommandLine', 'Test-ScheduledParent', 'Read-ProcessCpuSample', 'Measure-ProcessCpu', 'New-SpikeTracker', 'Step-SpikeTracker', 'Round-Share', 'New-SpikeRecord', 'Add-TrapRecord', 'Set-TrapHeartbeat') {
+    $script:SamplerCode += "function $fnName {`n" + (Get-Command $fnName).Definition + "`n}`n"
 }
 #endregion
 
@@ -523,10 +551,154 @@ try {
     $Sync.DiskResult = @{ Rows = @(); Count = 0; Status = 'Failed'; Errors = @($_.Exception.Message); Skipped = 0 }
 }
 '@
+
+# Embedded Fotokapan: samples CPU while OpenRelax runs (no administrator
+# rights). Calm: three Processor(_Total) counters every IntervalSec. A spike:
+# a PDH snapshot of every process at its first hot sample and at capture.
+# Stops within ~200 ms of $Sync.TrapStop; an open spike gets its end record.
+$script:TrapSamplerCode = @'
+param($Sync, $Opt)
+try { [System.Threading.Thread]::CurrentThread.Priority = [System.Threading.ThreadPriority]::AboveNormal } catch {}
+$interval = [Math]::Max(1, [int]$Opt.IntervalSec)
+$cores = [Environment]::ProcessorCount
+$total = $null; $dpc = $null; $irq = $null
+$state = New-SpikeTracker ([int]$Opt.Threshold) ([int]$Opt.SustainSec) $interval
+$burst = $null; $hotSum = 0.0; $hotCount = 0; $dpcSum = 0.0; $irqSum = 0.0
+$lastBeat = [datetime]::MinValue; $lastCpu = 0.0
+function Write-SamplerBeat {
+    Set-TrapHeartbeat $Opt.Dir ([ordered]@{ t = (Get-Date).ToString('s'); cpu = [int]$lastCpu; spikes = $state.Spikes; inSpike = $state.InSpike
+        threshold = [int]$Opt.Threshold; version = [string]$Opt.Version; mode = 'embedded'; pid = $PID })
+}
+function Get-SpikeProcesses($Rows) {
+    # Names, parents and command lines of the top processes and their parents.
+    $info = @{}
+    $ids = @($Rows | Select-Object -First 5 | ForEach-Object { [int]$_.Pid })
+    foreach ($round in 1..2) {
+        $want = @($ids | Where-Object { $_ -gt 0 -and -not $info.ContainsKey($_) })
+        if (-not $want.Count) { break }
+        $filter = ($want | ForEach-Object { 'ProcessId=' + $_ }) -join ' OR '
+        foreach ($w in @(Get-CimInstance Win32_Process -Filter $filter -Property ProcessId, ParentProcessId, Name, CommandLine -ErrorAction SilentlyContinue)) {
+            $info[[int]$w.ProcessId] = @{ Name = [string]$w.Name; ParentPid = [int]$w.ParentProcessId; CommandLine = [string]$w.CommandLine }
+        }
+        $ids = @($info.Values | ForEach-Object { [int]$_.ParentPid })
+    }
+    return $info
+}
+function Get-DefenderMode($Rows) {
+    $busy = @($Rows | Select-Object -First 3 | Where-Object { $_.Instance -like 'MsMpEng*' -and $_.Pct -ge 10 })
+    if (-not $busy.Count) { return $null }
+    # On-demand scans log 1000 on start and 1001/1002 on end; a pending 1000 means a scan.
+    try {
+        $e = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1000, 1001, 1002 } -MaxEvents 1 -ErrorAction Stop
+        if ($e.Id -eq 1000) { return 'scan' }
+    } catch {}
+    return 'realtime'
+}
+function Write-SpikeCapture([string]$Kind) {
+    $after = Read-ProcessCpuSample
+    $rows = @(Measure-ProcessCpu $script:burst $after $cores)
+    $avgTotal = $lastCpu; if ($script:hotCount) { $avgTotal = $script:hotSum / $script:hotCount }
+    $avgDpc = 0.0; $avgIrq = 0.0
+    if ($script:hotCount) { $avgDpc = $script:dpcSum / $script:hotCount; $avgIrq = $script:irqSum / $script:hotCount }
+    Set-Variable -Name RecordCommandLines -Scope Global -Value ([bool]$Sync.TrapRecordCmd)
+    $record = New-SpikeRecord $Kind $script:burst.At ($after.At - $script:burst.At).TotalSeconds $avgTotal $rows (Get-SpikeProcesses $rows) $avgDpc $avgIrq
+    $record.defender = Get-DefenderMode $rows
+    Add-TrapRecord $Opt.Dir $record
+    # The next capture of a long spike measures from here.
+    $script:burst = $after; $script:hotSum = 0.0; $script:hotCount = 0; $script:dpcSum = 0.0; $script:irqSum = 0.0
+}
+try {
+    $total = New-Object System.Diagnostics.PerformanceCounter('Processor', '% Processor Time', '_Total')
+    $dpc = New-Object System.Diagnostics.PerformanceCounter('Processor', '% DPC Time', '_Total')
+    $irq = New-Object System.Diagnostics.PerformanceCounter('Processor', '% Interrupt Time', '_Total')
+    [void]$total.NextValue(); [void]$dpc.NextValue(); [void]$irq.NextValue()
+    [void](Read-ProcessCpuSample)   # the first PDH read of a session is slow; warm it up before a spike needs it
+    Add-TrapRecord $Opt.Dir ([ordered]@{ t = (Get-Date).ToString('s'); kind = 'monitor'; version = [string]$Opt.Version; threshold = [int]$Opt.Threshold; pid = $PID; mode = 'embedded' })
+    $next = (Get-Date).AddSeconds($interval)
+    while (-not $Sync.TrapStop) {
+        Start-Sleep -Milliseconds 200
+        $now = Get-Date
+        if ($now -lt $next) { continue }
+        $next = $now.AddSeconds($interval)
+        try {
+            $lastCpu = [Math]::Min(100, [double]$total.NextValue())
+            $d = [double]$dpc.NextValue(); $i = [double]$irq.NextValue()
+            $Sync.TrapBeat = [DateTime]::UtcNow
+            $action = Step-SpikeTracker $state $lastCpu $now
+            switch ($action) {
+                'arm'     { $script:burst = Read-ProcessCpuSample; $script:hotSum = $lastCpu; $script:hotCount = 1; $script:dpcSum = $d; $script:irqSum = $i }
+                'start'   { $script:hotSum += $lastCpu; $script:hotCount++; $script:dpcSum += $d; $script:irqSum += $i; Write-SpikeCapture 'start' }
+                'ongoing' { Write-SpikeCapture 'ongoing' }
+                'end'     { Add-TrapRecord $Opt.Dir ([ordered]@{ t = $now.ToString('s'); kind = 'end'; durationSec = [int]($now - $state.SpikeStart).TotalSeconds; peak = [int][Math]::Round($state.Peak) }); $script:burst = $null }
+                default {
+                    if ($state.InSpike) { $script:hotSum += $lastCpu; $script:hotCount++; $script:dpcSum += $d; $script:irqSum += $i }
+                    elseif ($state.Above -gt 0) { $script:hotSum += $lastCpu; $script:hotCount++; $script:dpcSum += $d; $script:irqSum += $i }
+                    else { $script:burst = $null }
+                }
+            }
+            if (($now - $lastBeat).TotalSeconds -ge 60) { $lastBeat = $now; Write-SamplerBeat }
+        } catch {
+            $Sync.TrapError = $_.Exception.Message
+        }
+    }
+} catch {
+    $Sync.TrapError = $_.Exception.Message
+} finally {
+    try {
+        if ($state.InSpike) {
+            $now = Get-Date
+            Add-TrapRecord $Opt.Dir ([ordered]@{ t = $now.ToString('s'); kind = 'end'; durationSec = [int]($now - $state.SpikeStart).TotalSeconds; peak = [int][Math]::Round($state.Peak); stopped = $true })
+            $state.InSpike = $false
+        }
+        Write-SamplerBeat
+    } catch { $Sync.TrapError = $_.Exception.Message }
+    foreach ($c in @($total, $dpc, $irq)) { if ($c) { $c.Dispose() } }
+}
+'@
 #endregion
 
 #region 5. Windows integration helpers (startup entry, weekly scheduled task)
 $script:PsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+function Get-StartupCommand { return "`"$script:PsExe`" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -StartMinimized" }
+function Get-WeeklyTaskArguments { return "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -AutoClean" }
+
+# A moved or reinstalled copy re-points the startup entry and the weekly task
+# at itself when they start a script that no longer exists (or nothing is
+# registered although the setting is on). A second copy that is merely opened
+# - a development checkout - leaves a working entry alone.
+function Test-IntegrationNeedsRepair([string]$Registered, [string]$Expected) {
+    if (-not $Registered) { return $true }
+    if (Test-IntegrationCommand $Registered $Expected) { return $false }
+    $script = Get-IntegrationScriptPath $Registered
+    return (-not $script -or -not (Test-Path -LiteralPath $script -PathType Leaf))
+}
+
+function Repair-IntegrationPaths {
+    if ($script:TestMode) { return @() }
+    $repaired = @()
+    if ($script:Settings.runAtStartup) {
+        try {
+            $runKey = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction Stop
+            $current = ''
+            if ($runKey.PSObject.Properties['OpenRelax']) { $current = [string]$runKey.OpenRelax }
+            if (Test-IntegrationNeedsRepair $current (Get-StartupCommand)) {
+                if ((Set-StartupEntry $true).Ok) { $repaired += 'startup' }
+            }
+        } catch {}
+    }
+    if ($script:Settings.weeklyClean) {
+        try {
+            $task = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object { $_.TaskName -eq 'OpenRelax Weekly Clean' }) | Select-Object -First 1
+            $arguments = ''
+            if ($task) { $arguments = [string]$task.Actions[0].Arguments }
+            if (Test-IntegrationNeedsRepair $arguments (Get-WeeklyTaskArguments)) {
+                if ((Set-WeeklyTask $true).Ok) { $repaired += 'weekly' }
+            }
+        } catch {}
+    }
+    return $repaired
+}
 
 function Set-StartupEntry {
     param([bool]$Enable)
@@ -534,7 +706,7 @@ function Set-StartupEntry {
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     try {
         if ($Enable) {
-            $cmd = "`"$script:PsExe`" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -StartMinimized"
+            $cmd = Get-StartupCommand
             Set-ItemProperty -Path $runKey -Name 'OpenRelax' -Value $cmd -ErrorAction Stop
             return @{ Ok = $true; Key = 'logStartupOn' }
         } else {
@@ -552,7 +724,7 @@ function Set-WeeklyTask {
     $taskName = 'OpenRelax Weekly Clean'
     try {
         if ($Enable) {
-            $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -AutoClean"
+            $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument (Get-WeeklyTaskArguments)
             $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '12:00'
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force -ErrorAction Stop | Out-Null
             return @{ Ok = $true; Key = 'logTaskCreated' }
@@ -567,42 +739,63 @@ function Set-WeeklyTask {
 #endregion
 
 #region 5b. Fotokapan (CPU spike trap) integration
-# The trap runs as a SYSTEM scheduled task (fotokapan.ps1) so it keeps sampling
-# while this GUI is starved, frozen or closed. OpenRelax installs it and reads
-# its machine-readable output: durum.json (heartbeat) and spikes-YYYY-MM.jsonl.
+# Since 2.4 Fotokapan runs inside OpenRelax ($script:TrapSamplerCode) while the
+# app is open, without administrator rights, and writes durum.json and
+# spikes-YYYY-MM.jsonl to the user's profile. Before 2.4 it was a SYSTEM
+# scheduled task (fotokapan.ps1) writing to ProgramData; that task is only
+# detected and offered for removal, and its records are still read.
 $script:TrapTaskName = 'OpenRelax Fotokapan'
 $script:TrapRoot     = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
-$script:TrapDir      = Join-Path $script:TrapRoot 'logs'
-$script:TrapInstalledScript = Join-Path $script:TrapRoot 'bin\fotokapan.ps1'
-# Test hook: tests\gui-stress.ps1 points the view at a synthetic data set
-# Records a 2.2.x trap left in its root are read until an install moves them.
-$script:TrapLegacyDir = $(if ($script:TestMode) { '' } else { $script:TrapRoot })
-if ($env:OPENRELAX_TRAP_DIR) { $script:TrapDir = $env:OPENRELAX_TRAP_DIR; $script:TrapLegacyDir = '' }
+$script:TrapDir      = Join-Path $script:SettingsDir 'Fotokapan'
+# Records of the former SYSTEM task: 2.3 wrote to logs\, 2.2.x to the root.
+$script:TrapLegacyDir = $(if ($script:TestMode) { @() } else { @((Join-Path $script:TrapRoot 'logs'), $script:TrapRoot) })
+# Test hook: tests point the view and the sampler at a synthetic data set.
+if ($env:OPENRELAX_TRAP_DIR) { $script:TrapDir = $env:OPENRELAX_TRAP_DIR; $script:TrapLegacyDir = @() }
 $script:TrapScript   = Join-Path (Split-Path -Parent $script:ScriptPath) 'fotokapan.ps1'
 $script:TrapCache    = @{}
+$script:TrapRunner   = $null
 
-function Get-TrapState {
-    param([string]$Dir = $script:TrapDir)
-    $st = @{ Installed = $false; Running = $false; Outdated = $false; Beat = $null; Threshold = 85; Spikes = 0 }
-    if ($script:TestMode) { return $st }
-    $taskKnown = $true; $taskFound = $false; $taskRunning = $false
+# Whether the former SYSTEM task still exists and runs. A standard user may not
+# be allowed to read the task; then a fresh legacy heartbeat decides.
+function Get-LegacyTrapTask {
+    $result = @{ Found = $false; Running = $false }
+    if ($script:TestMode) { return $result }
+    $known = $true
     try {
         $svc = New-Object -ComObject Schedule.Service
         $svc.Connect()
         $task = $svc.GetFolder('\').GetTask($script:TrapTaskName)
-        $taskFound = $true
-        $taskRunning = ($task.State -eq 4)   # TASK_STATE_RUNNING
+        $result.Found = $true
+        $result.Running = ($task.State -eq 4)   # TASK_STATE_RUNNING
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($task)
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($svc)
     } catch {
-        # 0x80070002 = no such task. Anything else (a standard user may not be
-        # allowed to read a SYSTEM task) leaves the answer to the heartbeat.
+        # 0x80070002 = no such task.
         $hr = $_.Exception.HResult
         if ($_.Exception.InnerException) { $hr = $_.Exception.InnerException.HResult }
-        if ($hr -ne -2147024894) { $taskKnown = $false }
+        if ($hr -ne -2147024894) { $known = $false }
     }
+    if (-not $known) {
+        foreach ($dir in $script:TrapLegacyDir) {
+            $beat = Join-Path $dir 'durum.json'
+            if (-not (Test-Path -LiteralPath $beat)) { continue }
+            try {
+                $b = (Read-SharedText $beat) | ConvertFrom-Json
+                $t = [datetime]::ParseExact([string]$b.t, 's', [System.Globalization.CultureInfo]::InvariantCulture)
+                if (((Get-Date) - $t).TotalSeconds -lt 180) { $result.Found = $true; $result.Running = $true }
+            } catch {}
+        }
+    }
+    return $result
+}
+
+# Installed = switched on; Running = the sampler runspace is alive and its
+# heartbeat is fresh. Report and UI keys stay those of 2.3.
+function Get-TrapState {
+    param([string]$Dir = $script:TrapDir)
+    $st = @{ Installed = [bool]$script:Settings.trapEnabled; Running = $false; Outdated = $false; Beat = $null; Threshold = 85; Spikes = 0
+        LegacyTask = $false; LegacyRunning = $false }
     $beatFile = Join-Path $Dir 'durum.json'
-    if (-not $script:TestMode -and -not (Test-Path -LiteralPath $beatFile)) { $beatFile = Join-Path $script:TrapRoot 'durum.json' }
     if (Test-Path -LiteralPath $beatFile) {
         try {
             $b = (Read-SharedText $beatFile) | ConvertFrom-Json
@@ -611,26 +804,51 @@ function Get-TrapState {
             $st.Spikes = [int]$b.spikes
         } catch {}
     }
-    # The heartbeat is rewritten every minute; a stuck or dead monitor goes stale.
-    $fresh = [bool]($st.Beat -and ((Get-Date) - $st.Beat).TotalSeconds -lt 180)
-    if ($taskKnown) {
-        $st.Installed = $taskFound
-        $st.Running = $taskRunning -and $fresh
-    } else {
-        $st.Installed = $fresh
-        $st.Running = $fresh
-    }
-    $installed = $script:TrapInstalledScript
-    if ($st.Installed -and -not (Test-Path -LiteralPath $installed)) { $st.Outdated = $true }
-    if ($st.Installed -and (Test-Path -LiteralPath $installed) -and (Test-Path -LiteralPath $script:TrapScript)) {
-        try {
-            $st.Outdated = (Get-FileHash -LiteralPath $installed).Hash -ne (Get-FileHash -LiteralPath $script:TrapScript).Hash
-            $coreInstalled = Join-Path (Split-Path -Parent $installed) 'lib\OpenRelax.Core.ps1'
-            $coreSource = Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1'
-            if (-not (Test-Path -LiteralPath $coreInstalled) -or (Get-FileHash -LiteralPath $coreInstalled).Hash -ne (Get-FileHash -LiteralPath $coreSource).Hash) { $st.Outdated = $true }
-        } catch {}
-    }
+    $alive = [bool]($script:TrapRunner -and -not $script:TrapRunner.Handle.IsCompleted)
+    $beat = $script:Sync.TrapBeat
+    $fresh = [bool]($beat -and ([DateTime]::UtcNow - [DateTime]$beat).TotalSeconds -lt 180)
+    $st.Running = $alive -and $fresh
+    $legacy = Get-LegacyTrapTask
+    $st.LegacyTask = $legacy.Found
+    $st.LegacyRunning = $legacy.Running
     return $st
+}
+
+# Starts the embedded sampler unless it is switched off or the former SYSTEM
+# task still records (two recorders would log every spike twice).
+function Start-TrapSampler {
+    if ($script:TrapRunner -and -not $script:TrapRunner.Handle.IsCompleted) { return $true }
+    if (-not $script:Settings.trapEnabled) { return $false }
+    if ((Get-LegacyTrapTask).Running) { return $false }
+    $script:Sync.TrapStop = $false
+    $script:Sync.TrapError = ''
+    $script:Sync.TrapBeat = [DateTime]::UtcNow
+    $script:Sync.TrapRecordCmd = [bool]$script:Settings.trapRecordCommandLines
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript($script:SamplerCode)
+    [void]$ps.AddStatement().AddScript($script:TrapSamplerCode).AddArgument($script:Sync).AddArgument(@{ Dir = $script:TrapDir; Threshold = 85; SustainSec = 4; IntervalSec = 2; Version = $script:AppVersion })
+    $script:TrapRunner = @{ PS = $ps; RS = $rs; Handle = $ps.BeginInvoke() }
+    return $true
+}
+
+# Asks the sampler to stop and waits at most $WaitMs; a sampler that does not
+# stop in time is abandoned to process exit rather than blocking the UI.
+function Stop-TrapSampler([int]$WaitMs = 3000) {
+    $runner = $script:TrapRunner
+    if (-not $runner) { return }
+    $script:TrapRunner = $null
+    $script:Sync.TrapStop = $true
+    if ($runner.Handle.AsyncWaitHandle.WaitOne($WaitMs)) {
+        try { [void]$runner.PS.EndInvoke($runner.Handle) } catch {}
+        try { $runner.PS.Dispose() } catch {}
+        try { $runner.RS.Dispose() } catch {}
+    } else {
+        try { [void]$runner.PS.BeginStop($null, $null) } catch {}
+    }
 }
 
 #endregion
@@ -675,7 +893,7 @@ if ($SelfTest) {
     $ts = Get-TrapState
     $beat = 'none'
     if ($ts.Beat) { $beat = $ts.Beat.ToString('yyyy-MM-dd HH:mm:ss') }
-    Write-Host ("Fotokapan: installed={0} running={1} outdated={2} heartbeat={3} threshold={4}" -f $ts.Installed, $ts.Running, $ts.Outdated, $beat, $ts.Threshold)
+    Write-Host ("Fotokapan: enabled={0} legacyTask={1} legacyRunning={2} heartbeat={3} threshold={4}" -f $ts.Installed, $ts.LegacyTask, $ts.LegacyRunning, $beat, $ts.Threshold)
     $episodes = Get-TrapEpisodes (Read-TrapRecords -LegacyDir $script:TrapLegacyDir)
     Write-Host ("  spikes in the last 7 days: {0}" -f $episodes.Count)
     foreach ($c in (Get-TrapCulprits $episodes | Select-Object -First 3)) {
@@ -1927,7 +2145,7 @@ $script:TrapOptionChangedHandler = {
         try { $sender.Checked = $old } finally { $script:UILoading = $false }
         return
     }
-    if ($key -eq 'trapRecordCommandLines') { Write-Log (T 'logTrapCmdChanged') 'warn' }
+    if ($key -eq 'trapRecordCommandLines') { $script:Sync.TrapRecordCmd = [bool]$sender.Checked; Write-Log (T 'logTrapCmdChanged') 'warn' }
 }
 $chkTrapNotify = New-Object System.Windows.Forms.CheckBox
 $chkTrapCmd = New-Object System.Windows.Forms.CheckBox
@@ -2057,7 +2275,7 @@ $btnTrapPageRecords.add_Click($script:TrapPageClick)
 Show-TrapPage 'summary'
 
 $script:TrapDiagColors = @{
-    defender = '#F59E0B'; unattributed = '#F87171'; game = '#A78BFA'; devtools = '#38BDF8'
+    defender = '#F59E0B'; unattributed = '#F87171'; drivers = '#FB7185'; game = '#A78BFA'; devtools = '#38BDF8'
     browser = '#34D399'; windows = '#94A3B8'; scheduled = '#FBBF24'; other = '#CBD5E1'
 }
 
@@ -2066,23 +2284,42 @@ $script:TrapLastState = $null
 $script:TrapSig = $null
 
 function Set-TrapStateLabel($St) {
-    if (-not $St.Installed)  { $key = 'trapStMissing'; $color = '#94A3B8' }
-    elseif ($St.Outdated)    { $key = 'trapStUpdate';  $color = '#3B82F6' }
-    elseif ($St.Running)     { $key = 'trapStRunning'; $color = '#10B981' }
-    else                     { $key = 'trapStStopped'; $color = '#F59E0B' }
+    $detail = (T 'trapDetailNone')
+    if ($St.LegacyRunning)       { $key = 'trapStLegacy';   $color = '#F59E0B'; $detail = (T 'trapDetailLegacy') }
+    elseif (-not $St.Installed)  { $key = 'trapStOff';      $color = '#94A3B8' }
+    elseif ($St.Running)         { $key = 'trapStRunning';  $color = '#10B981' }
+    else                         { $key = 'trapStStarting'; $color = '#3B82F6' }
     $lblTrapState.Text = (T $key)
     $lblTrapState.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($color)
-    if ($St.Installed -and $St.Beat) {
-        $lblTrapDetail.Text = [string]::Format((T 'trapDetail'), $St.Beat.ToString('HH:mm:ss'), $St.Threshold, $St.Spikes)
-    } else {
-        $lblTrapDetail.Text = (T 'trapDetailNone')
+    if ($St.Installed -and $St.Running -and $St.Beat) {
+        $detail = [string]::Format((T 'trapDetail'), $St.Beat.ToString('HH:mm:ss'), $St.Threshold, $St.Spikes)
     }
+    $lblTrapDetail.Text = $detail
 }
 
 function Update-TrapButtons {
     $idle = -not $script:TrapProc
+    $st = $script:TrapLastState
+    $btnTrapInstall.Text = $(if ($script:Settings.trapEnabled) { T 'btnTrapOff' } else { T 'btnTrapOn' })
     $btnTrapInstall.Enabled = $idle
-    $btnTrapRemove.Enabled = $idle -and $script:TrapLastState -and $script:TrapLastState.Installed
+    $btnTrapRemove.Visible = [bool]($st -and $st.LegacyTask)
+    $btnTrapRemove.Enabled = $idle
+}
+
+# The on/off switch: saves the preference and starts or stops the sampler.
+function Set-TrapEnabled([bool]$Enabled) {
+    $old = [bool]$script:Settings.trapEnabled
+    $script:Settings.trapEnabled = $Enabled
+    if (-not (Save-Settings)) { $script:Settings.trapEnabled = $old; return }
+    if ($Enabled) {
+        if (Start-TrapSampler) { Write-Log (T 'logTrapOn') 'success' }
+        elseif ((Get-LegacyTrapTask).Running) { Write-Log (T 'trapDetailLegacy') 'warn' }
+    } else {
+        Stop-TrapSampler
+        Write-Log (T 'logTrapOff') 'info'
+    }
+    $script:TrapSig = $null
+    Update-TrapView
 }
 
 function Update-TrapContent($Episodes, $St) {
@@ -2208,20 +2445,21 @@ function Complete-TrapAction {
     try { $script:TrapProc.Dispose() } catch {}
     $script:TrapProc = $null
     $script:TrapSig = $null
+    # With the old SYSTEM task gone the embedded recorder takes over.
+    if ($script:TrapMode -eq 'Uninstall') { [void](Start-TrapSampler) }
     Update-TrapView
 }
 
-$btnTrapInstall.add_Click({ Start-TrapAction 'Install' })
+$btnTrapInstall.add_Click({ Set-TrapEnabled (-not [bool]$script:Settings.trapEnabled) })
 $btnTrapRemove.add_Click({
     $answer = [System.Windows.Forms.MessageBox]::Show((T 'trapConfirmRemove'), 'OpenRelax',
         [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Start-TrapAction 'Uninstall' }
 })
 $btnTrapLog.add_Click({
-    $log = Get-ChildItem -LiteralPath $script:TrapDir -Filter 'fotokapan-*.log' -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1
-    if ($log) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $log.FullName) }
-    else { Write-Log (T 'trapNoLog') 'warn' }
+    # The embedded recorder keeps its records next to the settings: open that folder.
+    [void][IO.Directory]::CreateDirectory($script:TrapDir)
+    Start-Process explorer.exe -ArgumentList ('"{0}"' -f $script:TrapDir)
 })
 
 # Writes the 7-day diagnosis as Markdown (Documents\OpenRelax, or the given folder) and returns its path.
@@ -2806,7 +3044,7 @@ function Apply-Language {
     $trapTitle.Text = (T 'trapTitle')
     $trapTopTitle.Text = (T 'trapTopTitle')
     $trapRecentTitle.Text = (T 'trapRecentTitle')
-    $btnTrapInstall.Text = (T 'btnTrapInstall')
+    Update-TrapButtons
     $btnTrapRemove.Text = (T 'btnTrapRemove')
     $btnTrapLog.Text = (T 'btnTrapLog')
     $btnTrapExport.Text = (T 'btnTrapExport')
@@ -2922,6 +3160,8 @@ $form.add_FormClosing({
     }
     try { $timer.Stop() } catch {}
     try { $pump.Stop() } catch {}
+    # The embedded recorder closes an open spike and writes its last heartbeat.
+    Stop-TrapSampler 3000
     # Ask running workers to stop asynchronously - a synchronous Stop() here
     # could block the UI thread mid-close; the process exit below reclaims
     # everything regardless.
@@ -2935,6 +3175,7 @@ $form.add_FormClosing({
 
 $form.add_Load({
     Write-Log (T 'logStart') 'info'
+    if (@(Repair-IntegrationPaths).Count) { Write-Log (T 'logPathRepaired') 'success' }
     if (-not $script:SettingsValid -and $settingsDocument.Exists) { Write-Log ('Settings were rejected; safe defaults are active: ' + $script:SettingsError) 'error' }
     if (-not $script:cpuCounter) { Write-Log (T 'logCpuFail') 'warn' }
 
@@ -2951,6 +3192,8 @@ $form.add_Load({
     $timer.Start()
     $pump.Start()
     Start-ScanTask
+    if (Start-TrapSampler) { Write-Log (T 'logTrapOn') 'info' }
+    elseif ($script:Settings.trapEnabled -and (Get-LegacyTrapTask).Running) { Write-Log (T 'trapDetailLegacy') 'warn' }
 
     if ($env:OPENRELAX_SMOKETEST) {
         $script:SmokeTimer.Start()

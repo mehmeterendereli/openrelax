@@ -281,6 +281,23 @@ Case '2.2.1 records with parentCmd and *drivers* still diagnose' {
     Assert-True (@($d | Where-Object { $_.Category -eq 'unattributed' }).Count -eq 1 -and @($d | Where-Object { $_.Category -eq 'unattributed' })[0].Count -eq 2) (($d | ForEach-Object { '{0}:{1}' -f $_.Category, $_.Count }) -join ' ')
     Assert-True ((Get-TrapCulpritText '*drivers*') -eq (Get-TrapCulpritText '*unattributed*')) 'Legacy and new unattributed names read differently.'
 }
+Case 'measured DPC load is diagnosed as drivers' {
+    $start = [pscustomobject]@{ t = '2026-10-04T10:00:00'; kind = 'start'; total = 95; attributed = 30; dpc = 20; interrupt = 5; defender = $null
+        top = @([pscustomobject]@{ name = 'x.exe'; pct = 15; parent = ''; scheduled = $false }) }
+    $c = Get-TrapCulprit $start
+    Assert-True ($c.Name -eq '*dpc*' -and $c.Pct -eq 25) "Culprit: $($c.Name) $($c.Pct)"
+    $eps = New-Object System.Collections.Generic.List[object]; $eps.Add(@{ Start = $start; Defender = $null })
+    $d = @(Get-TrapDiagnosis $eps)
+    Assert-True ($d[0].Category -eq 'drivers' -and $d[0].Key -eq 'diag_drivers') ('Finding: ' + $d[0].Category)
+    Assert-True ((Get-TrapCulpritText '*dpc*') -match '^trapDpc') 'The measured driver culprit has no own text.'
+}
+Case 'small or unmeasured DPC load does not become a driver finding' {
+    $small = [pscustomobject]@{ t = '2026-10-04T10:00:00'; kind = 'start'; total = 95; attributed = 85; dpc = 6; interrupt = 2
+        top = @([pscustomobject]@{ name = 'x.exe'; pct = 70 }) }
+    Assert-True ((Get-TrapCulprit $small).Name -eq 'x.exe') 'A small DPC share displaced the top process.'
+    $legacy = @{ total = 95; attributed = 10; top = @(@{ name = 'demo.exe'; pct = 8 }) }
+    Assert-True ((Get-TrapCulprit $legacy).Name -eq '*unattributed*') 'A record without dpc was called a driver.'
+}
 Case 'hour histogram has 24 buckets counting starts' {
     $h = Get-TrapHourHistogram $diagEpisodes
     Assert-True ($h.Count -eq 24 -and $h[0] -eq 1 -and $h[15] -eq 3 -and (($h | Measure-Object -Sum).Sum) -eq 10) ($h -join ',')
@@ -340,6 +357,114 @@ Case 'notifications: baseline, new spike once, at most one per 15 minutes' {
 }
 #endregion
 
+#region Integration path repair
+. ([scriptblock]::Create((Get-TestFunctionSource @('Test-IntegrationCommand','Get-IntegrationScriptPath'))))
+. ([scriptblock]::Create((Get-TestFunctionSource @('Test-IntegrationNeedsRepair'))))
+Case 'only a missing or dead registration is repaired' {
+    $expected = '"C:\ps.exe" -File "C:\Apps\OpenRelax\openrelax.ps1" -StartMinimized'
+    $other = Join-Path $Work 'other-copy\openrelax.ps1'
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $other)); [IO.File]::WriteAllText($other,'# another copy')
+    Assert-True (Test-IntegrationNeedsRepair '' $expected) 'A missing registration was not repaired.'
+    Assert-True (-not (Test-IntegrationNeedsRepair $expected $expected)) 'A current registration was rewritten.'
+    Assert-True (Test-IntegrationNeedsRepair ('"C:\ps.exe" -File "' + (Join-Path $Work 'moved-away\openrelax.ps1') + '" -StartMinimized') $expected) 'A registration of a deleted folder was kept.'
+    Assert-True (-not (Test-IntegrationNeedsRepair ('"C:\ps.exe" -File "' + $other + '" -StartMinimized') $expected)) 'A working registration of another copy was taken over.'
+}
+Case 'the script a registered command starts is extracted' {
+    Assert-True ((Get-IntegrationScriptPath '"C:\ps.exe" -STA -File "C:\Old Folder\openrelax.ps1" -StartMinimized') -eq 'C:\Old Folder\openrelax.ps1') 'The quoted script path was not found.'
+    Assert-True ((Get-IntegrationScriptPath '-NoProfile -File C:\x\openrelax.ps1 -AutoClean') -eq 'C:\x\openrelax.ps1') 'An unquoted script path was not found.'
+    Assert-True ((Get-IntegrationScriptPath 'notepad.exe') -eq '') 'A command without -File produced a path.'
+}
+Case 'integration commands compare ignoring case and spacing' {
+    $expected = '"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "C:\Apps\OpenRelax\openrelax.ps1" -StartMinimized'
+    Assert-True (Test-IntegrationCommand $expected $expected) 'An identical command was a mismatch.'
+    Assert-True (Test-IntegrationCommand ('  ' + $expected.ToLowerInvariant().Replace(' -nop', '  -nop') + ' ') $expected) 'Case or spacing made a mismatch.'
+    $moved = $expected -replace 'C:\\Apps\\OpenRelax', 'C:\Users\x\Desktop\old'
+    Assert-True (-not (Test-IntegrationCommand $moved $expected)) 'A different folder was accepted.'
+    Assert-True (-not (Test-IntegrationCommand '' $expected) -and -not (Test-IntegrationCommand $null $expected)) 'A missing command was accepted.'
+}
+#endregion
+
+#region Embedded spike sampler
+. ([scriptblock]::Create((Get-TestFunctionSource @('Read-ProcessCpuSample','Measure-ProcessCpu','New-SpikeTracker','Step-SpikeTracker','Round-Share','New-SpikeRecord','Add-TrapRecord','Set-TrapHeartbeat','Protect-CommandLine','Test-ScheduledParent'))))
+Case 'process CPU is matched by PID, not by instance name' {
+    # chrome#3 (pid 11) became chrome#2 after pid 10 exited; pid 12 started in between.
+    $before = @{ At = (Get-Date); Ts100 = [long]0; ByPid = @{ 10 = @{ Instance = 'chrome#2'; Raw = [long]0 }; 11 = @{ Instance = 'chrome#3'; Raw = [long]1000000 } } }
+    $after  = @{ At = (Get-Date); Ts100 = [long]20000000; ByPid = @{ 11 = @{ Instance = 'chrome#2'; Raw = [long]9000000 }; 12 = @{ Instance = 'python'; Raw = [long]4000000 } } }
+    $rows = @(Measure-ProcessCpu $before $after 4)
+    $chrome = @($rows | Where-Object { $_.Pid -eq 11 })
+    Assert-True ($chrome.Count -eq 1 -and [Math]::Abs($chrome[0].Pct - 10) -lt 0.01) ('chrome: ' + ($rows | ForEach-Object { '{0}:{1}' -f $_.Pid, $_.Pct }))
+    Assert-True (@($rows | Where-Object { $_.Pid -eq 12 })[0].Pct -eq 5) 'A process started during the window was not counted from zero.'
+    Assert-True (@($rows | Where-Object { $_.Pid -eq 10 }).Count -eq 0) 'An exited process was reported.'
+    Assert-True ($rows[0].Pid -eq 11) 'Rows are not sorted by share.'
+}
+Case 'idle and total are excluded' {
+    $before = @{ At = (Get-Date); Ts100 = [long]0; ByPid = @{ 0 = @{ Instance = 'Idle'; Raw = [long]0 }; 4 = @{ Instance = 'System'; Raw = [long]0 } } }
+    $after  = @{ At = (Get-Date); Ts100 = [long]10000000; ByPid = @{ 0 = @{ Instance = 'Idle'; Raw = [long]9000000 }; 4 = @{ Instance = 'System'; Raw = [long]100000 } } }
+    $rows = @(Measure-ProcessCpu $before $after 1)
+    Assert-True ($rows.Count -eq 1 -and $rows[0].Instance -eq 'System') ('Rows: ' + ($rows | ForEach-Object { $_.Instance }))
+}
+Case 'tracker arms, starts after the sustain window and ends after cooling' {
+    $state = New-SpikeTracker 85 4 2
+    $t = Get-Date '2026-10-17T10:00:00'
+    $actions = foreach ($cpu in 90,90,90,40,40) { $t = $t.AddSeconds(2); Step-SpikeTracker $state $cpu $t }
+    Assert-True (($actions -join ',') -eq 'arm,start,,,end') ('Actions: ' + ($actions -join ','))
+    Assert-True ($state.Spikes -eq 1 -and $state.Peak -eq 90 -and -not $state.InSpike) 'Tracker state is wrong after the spike.'
+    $again = foreach ($cpu in 90,40,90) { $t = $t.AddSeconds(2); Step-SpikeTracker $state $cpu $t }
+    Assert-True (($again -join ',') -eq 'arm,,arm') ('A single hot sample started a spike: ' + ($again -join ','))
+}
+Case 'tracker reports ongoing every 120 s' {
+    $state = New-SpikeTracker 85 4 2
+    $t = Get-Date '2026-10-17T10:00:00'
+    $actions = foreach ($i in 1..70) { $t = $t.AddSeconds(2); Step-SpikeTracker $state 95 $t }
+    Assert-True (@($actions | Where-Object { $_ -eq 'start' }).Count -eq 1 -and @($actions | Where-Object { $_ -eq 'ongoing' }).Count -eq 1) ('Actions: ' + (($actions | Where-Object { $_ }) -join ','))
+}
+$recordProcesses = @{
+    40 = @{ Name = 'python.exe'; ParentPid = 30; CommandLine = 'python C:\work\train.py --api-key=SECRET' }
+    30 = @{ Name = 'svchost.exe'; ParentPid = 4; CommandLine = 'C:\WINDOWS\system32\svchost.exe -k netsvcs -p -s Schedule' }
+}
+$recordRows = @(
+    @{ Pid = 40; Instance = 'python'; Pct = 61.234 }, @{ Pid = 77; Instance = 'chrome#2'; Pct = 12 }, @{ Pid = 78; Instance = 'a'; Pct = 3 },
+    @{ Pid = 79; Instance = 'b'; Pct = 2 }, @{ Pid = 80; Instance = 'c'; Pct = 1.5 }, @{ Pid = 81; Instance = 'd'; Pct = 1.2 }, @{ Pid = 82; Instance = 'e'; Pct = 0.4 })
+Case 'record keeps the 2.3 contract and adds dpc/interrupt' {
+    $script:RecordCommandLines = $false
+    $record = New-SpikeRecord 'start' (Get-Date '2026-10-17T21:40:00') 4.2 96.5 $recordRows $recordProcesses 3.25 1.5
+    Assert-True ((@($record.Keys) -join ',') -eq 't,kind,window,total,attributed,dpc,interrupt,top,defender') ('Keys: ' + (@($record.Keys) -join ','))
+    Assert-True ($record.t -eq '2026-10-17T21:40:00' -and $record.dpc -eq 3.3 -and $record.interrupt -eq 1.5 -and $record.attributed -eq 81.3) 'Header fields are wrong.'
+    $top = @($record.top)
+    Assert-True ($top.Count -eq 5 -and $top[0].name -eq 'python.exe' -and $top[0].pct -eq 61.2 -and $top[0].parent -eq 'svchost.exe' -and $top[0].scheduled) 'Top process fields are wrong.'
+    Assert-True ($top[1].name -eq 'chrome.exe' -and $top[1].parent -eq '') 'Unknown processes fall back to the instance name.'
+    $json = ConvertTo-Json -InputObject $record -Compress -Depth 5
+    Assert-True ($json.StartsWith('{"t":"2026-10-17T21:40:00","kind":"start"')) $json
+}
+Case 'record omits command lines unless recording is on' {
+    $script:RecordCommandLines = $false
+    $off = New-SpikeRecord 'start' (Get-Date) 2 90 $recordRows $recordProcesses 0 0
+    Assert-True (@($off.top)[0].cmd -eq '' -and @($off.top)[0].parentCmd -eq '') 'A command line was recorded while off.'
+    $script:RecordCommandLines = $true
+    try { $on = New-SpikeRecord 'start' (Get-Date) 2 90 $recordRows $recordProcesses 0 0 } finally { $script:RecordCommandLines = $false }
+    $cmd = [string]@($on.top)[0].cmd
+    Assert-True ($cmd -match 'train\.py' -and $cmd -notmatch 'SECRET') "Recorded: $cmd"
+}
+Case 'records append as one JSON line each, heartbeat replaces atomically' {
+    $dir = Join-Path $Work 'sampler-out'
+    $script:RecordCommandLines = $false
+    Add-TrapRecord $dir ([ordered]@{ t = '2026-10-17T10:00:00'; kind = 'monitor'; version = 'test' })
+    Add-TrapRecord $dir (New-SpikeRecord 'start' (Get-Date '2026-10-17T10:00:10') 2 90 $recordRows $recordProcesses 0 0)
+    $lines = @([IO.File]::ReadAllLines((Join-Path $dir 'spikes-2026-10.jsonl')) | Where-Object { $_ })
+    Assert-True ($lines.Count -eq 2 -and $lines[1].StartsWith('{"t":"2026-10-17T10:00:10"')) "Lines: $($lines.Count)"
+    $bytes = [IO.File]::ReadAllBytes((Join-Path $dir 'spikes-2026-10.jsonl'))
+    Assert-True ($bytes[0] -eq [byte][char]'{') 'The record file starts with a BOM.'
+    Set-TrapHeartbeat $dir ([ordered]@{ t = '2026-10-17T10:01:00'; threshold = 85; spikes = 1 })
+    Set-TrapHeartbeat $dir ([ordered]@{ t = '2026-10-17T10:02:00'; threshold = 85; spikes = 2 })
+    $beat = Get-Content -LiteralPath (Join-Path $dir 'durum.json') -Raw | ConvertFrom-Json
+    Assert-True ($beat.spikes -eq 2 -and @(Get-ChildItem -LiteralPath $dir -Filter '*.tmp').Count -eq 0) 'Heartbeat was not replaced cleanly.'
+}
+Case 'a live PDH read sees more than 10 processes and includes this process' {
+    $sample = Read-ProcessCpuSample
+    Assert-True ($sample.ByPid.Count -gt 10 -and $sample.ByPid.ContainsKey($PID) -and $sample.Ts100 -gt 0) "Processes: $($sample.ByPid.Count)"
+}
+#endregion
+
 #region Worker sources
 function Get-WorkerSource([string]$Name) {
     $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'),[ref]$null,[ref]$null)
@@ -359,6 +484,31 @@ Case 'clean worker exposes live progress and always clears it' {
         Assert-True ($null -ne $sync.Seen -and $sync.Seen[0] -eq $true -and $sync.Seen[1] -eq 0 -and $sync.Seen[2] -eq 0) 'Progress was not reset and switched on before maintenance.'
         Assert-True ($sync.Cleaning -eq $false -and $null -ne $sync.CleanResult) 'Progress stayed on after the worker ended.'
     }
+}
+Case 'the sampler worker records a synthetic spike and stops on request' {
+    $dir = Join-Path $Work 'sampler-worker'
+    $sync = [hashtable]::Synchronized(@{ TrapStop = $false; TrapBeat = $null; TrapError = ''; TrapRecordCmd = $false })
+    # One busy thread is far above a 1 % threshold on any machine.
+    $burner = [powershell]::Create(); [void]$burner.AddScript('$end = [DateTime]::UtcNow.AddSeconds(14); while ([DateTime]::UtcNow -lt $end) { $x = 1 }')
+    $burnHandle = $burner.BeginInvoke()
+    $ps = [powershell]::Create()
+    try {
+        [void]$ps.AddScript((Get-TestFunctionSource @('Read-ProcessCpuSample','Measure-ProcessCpu','New-SpikeTracker','Step-SpikeTracker','Round-Share','New-SpikeRecord','Add-TrapRecord','Set-TrapHeartbeat','Protect-CommandLine','Test-ScheduledParent')))
+        [void]$ps.AddStatement().AddScript((Get-WorkerSource 'TrapSamplerCode')).AddArgument($sync).AddArgument(@{ Dir = $dir; Threshold = 1; SustainSec = 2; IntervalSec = 1; Version = 'test' })
+        $handle = $ps.BeginInvoke()
+        Start-Sleep -Seconds 9
+        $sync.TrapStop = $true
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        Assert-True ($handle.AsyncWaitHandle.WaitOne(3000)) 'The sampler did not stop within 3 s.'
+        [void]$ps.EndInvoke($handle)
+        Assert-True (-not $ps.HadErrors -and -not $sync.TrapError) ('Sampler errors: ' + ($ps.Streams.Error -join '; ') + $sync.TrapError)
+    } finally { $ps.Dispose(); [void]$burner.EndInvoke($burnHandle); $burner.Dispose() }
+    $records = @(Get-Content -LiteralPath (Get-ChildItem -LiteralPath $dir -Filter 'spikes-*.jsonl').FullName | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+    $kinds = @($records | ForEach-Object { $_.kind })
+    Assert-True ($kinds[0] -eq 'monitor' -and $kinds -contains 'start' -and $kinds[$kinds.Count - 1] -eq 'end') ('Kinds: ' + ($kinds -join ','))
+    $start = @($records | Where-Object { $_.kind -eq 'start' })[0]
+    Assert-True ($start.PSObject.Properties['dpc'] -and @($start.top).Count -ge 1 -and $start.top[0].name -like '*.exe') 'The start record lacks the embedded fields.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $dir 'durum.json') -Raw | ConvertFrom-Json).mode -eq 'embedded') 'No embedded heartbeat was written.'
 }
 Case 'disk walk reports root files and per-folder totals' {
     $disk = Join-Path $Work 'disk'

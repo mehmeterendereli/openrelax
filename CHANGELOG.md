@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.4.0 — unreleased
+
+Fotokapan now runs inside OpenRelax. Design: `docs/superpowers/specs/2026-10-17-openrelax-ai-growth-design.md`; plan: `docs/superpowers/plans/2026-10-17-openrelax-2.4.md`.
+
+### Changed
+- **Embedded Fotokapan.** The spike recorder runs in a background runspace while OpenRelax is open.
+  - No administrator rights, no SYSTEM task, one switch on the Fotokapan tab (on by default).
+  - Per-process CPU comes from one PDH read of all processes (~16 ms of CPU, Defender included), not from process handles (~300 ms, protected processes unreadable).
+  - Records keep the 2.3 format and go to `%APPDATA%\OpenRelax\Fotokapan\`.
+  - It records only while OpenRelax runs.
+- **The old SYSTEM task.** It is detected. While it still records, the built-in recorder waits so spikes are not logged twice, and **Remove old task** uninstalls it (one administrator prompt). Its records under `ProgramData` are still read.
+- **Command-line recording** (opt-in, masked) now applies immediately.
+- **Open folder** opens the records folder; the embedded recorder writes no text log.
+
+### Added
+- **Measured driver load.** Records carry the interrupt and DPC share of the CPU. When that share is at least 10 % and larger than the top process, the culprit is reported as driver load backed by the measurement. Residual CPU without it stays "unattributed".
+- **Path repair.** When start-with-Windows or weekly cleaning is on but the registered command starts a script that no longer exists (the folder was moved), OpenRelax registers itself again. A working registration of another copy is left alone.
+- **One-line install:**
+
+  ```powershell
+  irm https://raw.githubusercontent.com/mehmeterendereli/openrelax/main/install.ps1 | iex
+  ```
+
+  - Downloads the latest release zip and checks its SHA256 before extracting.
+  - Installs to `%LOCALAPPDATA%\Programs\OpenRelax` and adds a Start menu shortcut.
+  - Never replaces a folder that is not an OpenRelax install.
+- **Release assets.** `OpenRelax-<version>.zip` and `SHA256SUMS` are attached to every release by `.github/workflows/release.yml`. A Scoop manifest is in `bucket/`.
+- **Tests:**
+  - `tests/footprint.ps1` measures the app's own CPU, memory, handles and GDI in the tray (see README).
+  - `tests/install-contract.ps1` covers the installer.
+  - The sampler, tracker, record, driver-load and path-repair cases are in `tests/unit.ps1`.
+
+### Fixed
+- `tests/verify.ps1` no longer fails when a longer checkout path makes PowerShell wrap an error message across lines.
+
 ## 2.3.0 — 2026-10-17
 
 This release joins the two lines of development. The 2.2 features were built

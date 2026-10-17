@@ -7,6 +7,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 $workspace = New-TestWorkspace $Work
 $Work = $workspace.Path
 function Assert([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
+$verified = $false
 try {
     $sources = @(Get-ChildItem -LiteralPath $repo -Filter '*.ps1' -Recurse -File)
     foreach ($source in $sources) {
@@ -16,7 +17,7 @@ try {
         if ($source.Name -eq 'openrelax.ps1') { $appAst = $ast }
     }
     $workers = @{}
-    foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode') {
+    foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode','TrapSamplerCode') {
         $assignment = $appAst.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq ('$script:' + $name)},$true)
         $literal = $assignment.Right.Find({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst]},$true)
         Assert ($null -ne $literal) "Worker source missing: $name"
@@ -25,9 +26,9 @@ try {
         Assert ($errors.Count -eq 0) "Worker parser errors: $name"
         $workers[$name] = $literal.Value
     }
-    Write-Host "Parser OK: $($sources.Count) source/test files and 4 workers."
+    Write-Host "Parser OK: $($sources.Count) source/test files and 5 workers."
     # Bounded children run pure contracts/unit cases and small owned synthetic file fixtures.
-    foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts'),@('unit.ps1','unit','Unit tests'))) {
+    foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts',120),@('unit.ps1','unit','Unit tests',240),@('install-contract.ps1','install','Install contracts',300))) {
         $contractInfo = [Diagnostics.ProcessStartInfo]::new()
         $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot $suite[0]) + '" -Work "' + (Join-Path $Work $suite[1]) + '" -KeepArtifacts'
@@ -38,7 +39,12 @@ try {
         $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work ($suite[1] + '-module-cache')
         $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
         [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
-        if (-not $child.WaitForExit(120000)) { $child.Kill(); $child.WaitForExit(); throw ('Owned child timed out: ' + $suite[2]) }
+        if (-not $child.WaitForExit($suite[3] * 1000)) {
+            # Show how far the child got; killing it ends its streams.
+            $child.Kill(); $child.WaitForExit()
+            Write-Host ([string]$out.Result).TrimEnd(); Write-Host ([string]$err.Result).TrimEnd()
+            throw ('Owned child timed out after ' + $suite[3] + ' s: ' + $suite[2])
+        }
         $code = $child.ExitCode; $text = $out.Result; $errorText = $err.Result; $child.Dispose()
         Write-Host $text.TrimEnd()
         Assert ($code -eq 0 -and -not $errorText -and $text -match ' 0 failed') ($suite[2] + ' failed: ' + $errorText)
@@ -62,13 +68,15 @@ try {
     Assert ((Test-Path -LiteralPath $old) -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'SelfTest modified fixture data.'
     Write-Host 'Real SelfTest OK: fixture files, settings and log unchanged.'
     $conflicting = Start-FixtureApp $fixture.Path '-SelfTest -AutoClean'
-    Assert ($conflicting.ExitCode -ne 0 -and $conflicting.Stderr -match 'cannot be combined') 'Conflicting modes were accepted.'
+    # Error records wrap at the console width, which depends on the checkout path:
+    # compare stderr text with all whitespace removed.
+    Assert ($conflicting.ExitCode -ne 0 -and (($conflicting.Stderr -replace '\s+','') -match 'cannotbecombined')) 'Conflicting modes were accepted.'
     Assert ((Get-FileHash -LiteralPath $settingsFile).Hash -eq $settingsHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash -and (Get-Item -LiteralPath $old).Length -eq 4096 -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'Conflicting modes changed state or target files.'
     Write-Host 'Conflicting SelfTest/AutoClean refused before mutation.'
     [IO.File]::WriteAllText($settingsFile,'{"language":')
     $badHash = (Get-FileHash -LiteralPath $settingsFile).Hash
     $bad = Start-FixtureApp $fixture.Path '-AutoClean'
-    Assert ($bad.ExitCode -eq 1 -and $bad.Stderr -match 'AutoClean stopped') 'Invalid settings did not stop AutoClean.'
+    Assert ($bad.ExitCode -eq 1 -and (($bad.Stderr -replace '\s+','') -match 'AutoCleanstopped')) 'Invalid settings did not stop AutoClean.'
     Assert ((Test-Path -LiteralPath $old) -and (Get-FileHash -LiteralPath $settingsFile).Hash -eq $badHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash) 'Invalid settings caused a mutation.'
     Write-SettingsAtomic $settings $settingsFile
     $clean = Start-FixtureApp $fixture.Path '-AutoClean'
@@ -131,6 +139,17 @@ try {
     } finally { [IO.Directory]::Delete($stateLink) }
     Write-Host 'Real disk worker and state-path guards OK: outside sentinel untouched.'
     Write-Host 'Verification OK.'
+    $verified = $true
 } finally {
-    if ($KeepArtifacts) { Write-Host "Artifacts: $Work" } else { Remove-TestWorkspace $workspace }
+    if ($KeepArtifacts) { Write-Host "Artifacts: $Work" }
+    else {
+        # After a failure, a child killed mid-case can leave a junction behind:
+        # report it without replacing the failure that caused it. After a
+        # successful run, a workspace that cannot be removed is itself a failure.
+        try { Remove-TestWorkspace $workspace }
+        catch {
+            if ($verified) { throw }
+            Write-Warning ('Test workspace kept at ' + $Work + ': ' + $_.Exception.Message)
+        }
+    }
 }

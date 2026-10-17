@@ -16,13 +16,12 @@ function Read-SharedText([string]$Path) {
 # Records of the last $Days days, oldest first. Parsed files are cached by
 # length, so a refresh with no new spikes costs a stat call per file.
 function Read-TrapRecords {
-    # -LegacyDir: a 2.2.x trap wrote to its root until an install moves the
-    # files into logs\; its records are older, so they are read first.
-    param([string]$Dir = $script:TrapDir, [int]$Days = 7, [string]$LegacyDir = '')
+    # -LegacyDir: folders of the former SYSTEM recorder (2.3 logs\, 2.2.x root);
+    # their records are older, so they are read first.
+    param([string]$Dir = $script:TrapDir, [int]$Days = 7, [string[]]$LegacyDir = @())
     $cutoff = (Get-Date).AddDays(-$Days).ToString('s')
     $all = New-Object System.Collections.Generic.List[object]
-    $dirs = @($Dir)
-    if ($LegacyDir -and -not $LegacyDir.TrimEnd('\').Equals($Dir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { $dirs = @($LegacyDir, $Dir) }
+    $dirs = @(@($LegacyDir | Where-Object { $_ -and -not $_.TrimEnd('\').Equals($Dir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) }) + $Dir)
     foreach ($month in @((Get-Date).AddMonths(-1), (Get-Date))) { foreach ($monthDir in $dirs) {
         $path = Join-Path $monthDir ('spikes-{0:yyyy-MM}.jsonl' -f $month)
         if (-not (Test-Path -LiteralPath $path)) { continue }
@@ -76,6 +75,16 @@ function Get-TrapEpisodes {
 # process accounts for (exited/unreadable processes or interrupts/DPCs) outweighs it.
 function Get-TrapCulprit($Start) {
     $top = @($Start.top | Where-Object { $_ })
+    # Embedded records (2.4+) measure interrupt and DPC time: a share of at
+    # least 10 % that outweighs the top process is driver load, with evidence.
+    $driver = 0.0
+    foreach ($field in 'dpc','interrupt') {
+        $has = if ($Start -is [System.Collections.IDictionary]) { $Start.Contains($field) } else { [bool]$Start.PSObject.Properties[$field] }
+        if ($has) { $driver += [double]$Start.$field }
+    }
+    $topPct = 0.0
+    if ($top.Count) { $topPct = [double]$top[0].pct }
+    if ($driver -ge 10 -and $driver -ge $topPct) { return @{ Name = '*dpc*'; Pct = $driver } }
     $unattributed = [double]$Start.total - [double]$Start.attributed
     if ($top.Count -eq 0 -or $unattributed -gt [double]$top[0].pct) {
         return @{ Name = '*unattributed*'; Pct = [Math]::Max(0, $unattributed) }
@@ -104,6 +113,7 @@ function ConvertFrom-TrapTime([string]$Iso) {
 # Display name of a culprit. Unattributed CPU (interrupts/DPC, exited or
 # unreadable processes) was recorded as '*drivers*' before 2.3.
 function Get-TrapCulpritText([string]$Name) {
+    if ($Name -eq '*dpc*') { return (T 'trapDpc') }
     if ($Name -in @('*drivers*','*unattributed*')) { return (T 'trapDrivers') }
     return $Name
 }
@@ -159,7 +169,9 @@ function Get-TrapDiagnosis {
     $groups = @{}; $scheduled = @{}; $scheduledCount = 0; $defScan = 0; $defFolder = ''
     foreach ($ep in $Episodes) {
         $c = Get-TrapCulprit $ep.Start
-        if ($c.Name -in @('*unattributed*','*drivers*')) { $cat = 'unattributed' } else { $cat = Get-TrapCategory $c.Name }
+        if ($c.Name -eq '*dpc*') { $cat = 'drivers' }
+        elseif ($c.Name -in @('*unattributed*','*drivers*')) { $cat = 'unattributed' }
+        else { $cat = Get-TrapCategory $c.Name }
         if (-not $groups.ContainsKey($cat)) { $groups[$cat] = @{ Count = 0; Names = @{} } }
         $groups[$cat].Count++
         $groups[$cat].Names[$c.Name] = 1 + [int]$groups[$cat].Names[$c.Name]

@@ -3,9 +3,45 @@
 [![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
 
 Portable, MIT-licensed Windows maintenance software written in PowerShell and
-Windows Forms. Source version **2.3.0** is available as a [GitHub source release](https://github.com/mehmeterendereli/openrelax/releases/tag/v2.3.0)
-([changelog](CHANGELOG.md)). It contains source only: no signed binary, stable
-binary distribution or published LTS support period is provided.
+Windows Forms. Source version **2.4.0** is in this repository; the latest
+[GitHub source release](https://github.com/mehmeterendereli/openrelax/releases/latest)
+is listed on the releases page ([changelog](CHANGELOG.md)). Releases contain
+source only: no signed binary, stable binary distribution or published LTS
+support period is provided.
+
+## Install
+
+```powershell
+irm https://raw.githubusercontent.com/mehmeterendereli/openrelax/main/install.ps1 | iex
+```
+
+The installer reads the latest release, checks the zip against its published
+SHA256 **before** extracting, installs to `%LOCALAPPDATA%\Programs\OpenRelax`
+for the current user (no administrator rights) and adds a Start menu shortcut.
+Settings and records stay in `%APPDATA%\OpenRelax`. Prefer to look first?
+[Read install.ps1](install.ps1), download the release zip and `SHA256SUMS`
+yourself, or use Scoop:
+`scoop bucket add openrelax https://github.com/mehmeterendereli/openrelax` and
+then `scoop install openrelax/openrelax`.
+
+## Measured footprint
+
+OpenRelax sits in the tray with the Fotokapan recorder on. `tests/footprint.ps1`
+measures the app process itself:
+
+| 10 minutes in the tray, Fotokapan on (Windows 11, 12 logical CPUs) | Value |
+| --- | ---: |
+| Average CPU, as a share of one core | 0.07 % |
+| Highest 10-second CPU | 0.47 % |
+| Private memory | 149 MB |
+| Memory growth over the run | none (−53 MB once the startup scan was released) |
+| Handles / GDI objects | 937 / 35 |
+
+Run it yourself: `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\footprint.ps1`
+(it uses an owned test folder, cleans nothing and fails above 1 % CPU or 20 MB growth).
+
+The base cost is Windows PowerShell plus WinForms memory. The claim is
+near-zero background CPU, not the smallest RAM.
 
 ## Interface preview
 
@@ -34,7 +70,7 @@ rights are not needed and a different existing shortcut is preserved. Keep
 `install-shortcut.ps1` and `docs/openrelax.ico` with the source for this command.
 
 The GUI opens without elevation. Administrator rights are only needed for
-marked system targets and Fotokapan installation/removal. Review the selected
+marked system targets and for removing the old Fotokapan task of 2.3 and earlier. Review the selected
 operations and confirmation dialog before maintenance.
 
 ```powershell
@@ -95,48 +131,44 @@ preferences in the GUI to recover it.
 
 ## Fotokapan CPU spike recorder
 
-Fotokapan runs independently as a SYSTEM scheduled task. Sustained CPU spikes
-record process names, IDs, parent names, CPU shares, timestamps and whether Task
-Scheduler started the process. **Command arguments are omitted by default**
-(`cmd` and `parentCmd` are empty). The Fotokapan tab's **Record command lines
-(masked)** option, applied with Install / Update, keeps masked command lines so a
-`python.exe` or `node.exe` spike shows which script ran. Masking removes common
-token/password/key forms but cannot guarantee that every secret is removed.
-CPU that cannot be assigned to a process is labelled unattributed (interrupts/DPC
-or processes that exited), rather than diagnosed as a faulty driver.
+Fotokapan runs **inside OpenRelax** while it is open, in the tray included. It
+needs no administrator rights and no scheduled task. Turn it on or off with one
+switch on the Fotokapan tab; it is on by default.
 
-The tab's **Summary** page turns the last 7 days into findings per culprit
-category with advice, the culprit table and spikes per hour of day. **Records**
-lists every spike; **Save report** writes the diagnosis as Markdown to
-`Documents\OpenRelax\`. A tray balloon announces a new spike (at most one per 15
-minutes; switch it off on the tab).
-Defender scan/realtime classification is heuristic; extra Defender performance
-tracing is off unless standalone `-DefenderTrace` is explicitly supplied.
-Such traces may contain file paths; do not publish them without review.
+**How it records:**
+- Every 2 seconds it reads three counters: total CPU, interrupt time and DPC time.
+- When CPU stays at or above 85 % for 4 seconds, it reads every process's CPU in a single performance-counter call. That call takes about 16 ms of CPU and includes protected processes such as Defender.
+- It records the burst itself:
+  - process names, IDs and CPU shares;
+  - parent names;
+  - whether Task Scheduler started the process;
+  - the measured interrupt and DPC share.
 
-```powershell
-# From an elevated PowerShell, or use the GUI's Fotokapan tab
-.\fotokapan.ps1 -Install
-.\fotokapan.ps1 -Uninstall
-```
+**Culprits:**
+- Interrupt/DPC load of at least 10 % that outweighs the top process is reported as driver load.
+- Other CPU that no process accounts for is labelled unattributed rather than blamed on a driver.
+- Defender scan versus real-time classification is a heuristic based on the Defender event log.
 
-Installed source is in `%ProgramData%\OpenRelax\Fotokapan\bin\`, including
-its `lib/` dependency. Logs/heartbeat are in the separate `logs/` directory.
-SYSTEM and Administrators have full control; the requesting GUI user has read
-and execute access even when a different administrator completes elevation.
-Standalone installation defaults to its current user; use `-ReaderSid <user-SID>`
-when explicitly installing for another Windows account. Source files retain
-administrative ownership and protected ACLs. Reparse and
-hardlinked existing task files/logs are rejected before ACL changes. Uninstall
-retains recordings. Installing over a 2.2.x trap moves its records, log and
-heartbeat from the trap root into `logs/` (until then the GUI reads both). They
-can still contain command arguments recorded by earlier versions; review them
-before sharing.
-Failed upgrades leave the old task disabled, including across reboot.
-Monthly logs older than 180 days are pruned by the recorder.
+**Records:**
+- They go to `%APPDATA%\OpenRelax\Fotokapan\` (`spikes-YYYY-MM.jsonl`, `durum.json`); **Open folder** shows them.
+- Nothing is recorded while OpenRelax is closed.
 
-Logs still reveal process names and timestamps. Argument omission is not a
-guarantee that all recorded diagnostic information is anonymous.
+**Command lines:** they are not recorded by default (`cmd` and `parentCmd` stay empty). With **Record command lines (masked)** on, masked command lines show which script a `python.exe` or `node.exe` spike ran; the change applies immediately. Masking removes common token, password and key forms, but it cannot guarantee that every secret is removed.
+
+**The tab:**
+- **Summary** turns the last 7 days into findings per culprit category with advice, the culprit table and spikes per hour of day.
+- **Records** lists every spike.
+- **Save report** writes the diagnosis as Markdown to `Documents\OpenRelax\`.
+- A tray balloon announces a new spike (at most one per 15 minutes; switch it off on the tab).
+
+**Upgrading from 2.3 or earlier.** The old recorder was a SYSTEM scheduled task (`fotokapan.ps1`).
+- While it still runs, the built-in recorder waits so no spike is logged twice, and the tab shows **Remove old task** (one administrator prompt).
+- Its records in `%ProgramData%\OpenRelax\Fotokapan\` stay readable and keep appearing in the tab.
+- `fotokapan.ps1` remains in 2.4 only for this removal and for its CI acceptance test.
+- Older records can still contain command arguments; review them before sharing.
+
+Records reveal process names and timestamps. Omitting arguments does not make
+every recorded diagnostic detail anonymous.
 
 ## Verification and contribution
 
@@ -188,9 +220,11 @@ non-sensitive log excerpt.
 | `lib/OpenRelax.Core.ps1` | Typed settings, atomic persistence, path guards, traversal and shared maintenance orchestration |
 | `lib/OpenRelax.Engine.ps1` | Cleanup categories, the guarded single-pass walker, Windows Update cleanup and RAM trimming |
 | `lib/OpenRelax.Trap.ps1` | Fotokapan record reading, episodes, culprits, diagnosis, report and notification rules |
-| `fotokapan.ps1` | Recorder and protected SYSTEM installation |
+| `lib/OpenRelax.Sampler.ps1` | Embedded Fotokapan: PDH sampling, spike tracker, records and heartbeat |
+| `fotokapan.ps1` | Former SYSTEM recorder (2.3 and earlier); kept in 2.4 for removal and its CI acceptance test |
+| `install.ps1`, `bucket/`, `.github/workflows/release.yml` | Verified one-line installer, Scoop manifest and release assets |
 | `tests/verify.ps1`, `tests/safety-contracts.ps1`, `tests/unit.ps1` | Lightweight CI, pure-function and real synthetic end-to-end checks |
-| `tests/run-all.ps1` | Release gate |
+| `tests/run-all.ps1`, `tests/footprint.ps1`, `tests/install-contract.ps1` | Release gate, own-footprint measurement and installer contract |
 | `tests/test-support.ps1` | Owned fixtures and bounded child-process isolation |
 | `tests/visual-smoke.ps1`, `tests/*-stress.ps1` | Visual and optional resource/load checks |
 
@@ -219,3 +253,16 @@ plandaki ya da o an çalışan uygulamalara dokunmayan RAM boşaltma geldi. 2.2.
 kurulmuş Fotokapan kayıtları, Kur / Güncelle ile yeni `logs\` klasörüne taşınır.
 Geliştirme sırası, kabul ölçütleri ve kalan sürüm doğrulamaları [PLAN.md](PLAN.md)
 içindedir. Lisans [MIT](LICENSE).
+
+2.4 yenilikleri: **Fotokapan artık OpenRelax'ın içinde çalışıyor.** Yönetici
+yetkisi ve zamanlanmış görev gerektirmiyor; Fotokapan sekmesindeki tek düğmeyle
+açılıp kapanıyor (varsayılan açık). Tüm süreçlerin CPU payı tek bir performans
+sayacı çağrısıyla (~16 ms) okunuyor; Defender dahil. Ölçülmüş kesme/DPC yükü
+artık "sürücü" bulgusu olarak ayrı gösteriliyor. Kayıtlar
+`%APPDATA%\OpenRelax\Fotokapan\` altında; OpenRelax kapalıyken kayıt alınmaz.
+Eski SYSTEM görevi algılanır, çalışırken yerleşik kaydedici çift kayıt olmasın
+diye bekler ve **Eski görevi kaldır** düğmesi onu kaldırır; eski kayıtlar
+okunmaya devam eder. Tek satırlık kurulum:
+`irm https://raw.githubusercontent.com/mehmeterendereli/openrelax/main/install.ps1 | iex`
+(zip'in SHA256'sı açmadan önce doğrulanır). Klasör taşınırsa başlangıç kaydı ve
+haftalık görev kendiliğinden yeni konuma yönlendirilir.

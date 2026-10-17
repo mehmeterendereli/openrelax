@@ -24,7 +24,7 @@ foreach ($file in $files) {
     if ($file -eq 'openrelax.ps1') { $appAst = $ast }
 }
 if ($null -eq $appAst) { throw 'Application source missing.' }
-foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode') {
+foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode','TrapSamplerCode') {
     $assignment = $appAst.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq ('$script:' + $name)}, $true)
     if ($null -eq $assignment) { throw ('Worker missing: ' + $name) }
     $literal = $assignment.Right.Find({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst]}, $true)
@@ -33,5 +33,5 @@ foreach ($name in 'ScanTaskCode','CleanTaskCode','RamTaskCode','DiskTaskCode') {
     [void][Management.Automation.Language.Parser]::ParseInput($literal.Value, [ref]$tokens, [ref]$errors)
     if (@($errors).Count) { throw ('Worker syntax error in ' + $name + ': ' + ($errors -join '; ')) }
 }
-Write-Host "Syntax preflight OK: $($files.Count) PowerShell files, four workers and interpolation regression."
+Write-Host "Syntax preflight OK: $($files.Count) PowerShell files, five workers and interpolation regression."
 Write-Host 'This is syntax-only; Windows PowerShell 5.1 runtime acceptance remains in the Windows jobs.'

@@ -1,0 +1,69 @@
+name: Release assets
+
+# Attaches the verified source zip and SHA256SUMS to a GitHub release.
+# install.ps1 and the Scoop manifest download exactly these two assets.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build assets for, e.g. v2.4.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  assets:
+    name: Source zip and SHA256SUMS
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Build and verify the source archive
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Unexpected tag $env:TAG" }
+          $version = $Matches[1]
+          $script = Get-Content -LiteralPath openrelax.ps1 -Raw
+          if ($script -notmatch ("\`$script:AppVersion\s*=\s*'" + [regex]::Escape($version) + "'")) { throw "openrelax.ps1 does not declare version $version" }
+          $out = Join-Path $env:RUNNER_TEMP 'release'; New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $zip = Join-Path $out "OpenRelax-$version.zip"
+          git archive --format=zip --prefix="OpenRelax-$version/" -o $zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $names = @($archive.Entries | ForEach-Object { $_.FullName })
+            foreach ($required in 'openrelax.ps1','fotokapan.ps1','launch.bat','install.ps1','lib/OpenRelax.Core.ps1','lib/OpenRelax.Engine.ps1','lib/OpenRelax.Trap.ps1','lib/OpenRelax.Sampler.ps1','docs/openrelax.ico','README.md','LICENSE') {
+              if (("OpenRelax-$version/" + $required) -notin $names) { throw "Archive lacks $required" }
+            }
+            if (@($names | Where-Object { $_ -match '(^|/)(\.git/|settings\.json$|autoclean\.log$|durum\.json$|spikes-.*\.jsonl$)' }).Count) { throw 'Archive contains runtime or private files' }
+          } finally { $archive.Dispose() }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path $out 'SHA256SUMS'), "$hash  OpenRelax-$version.zip`n")
+          "zip=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "sums=$(Join-Path $out 'SHA256SUMS')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "OpenRelax-$version.zip $hash"
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG --verify-tag --title "OpenRelax $($env:TAG.TrimStart('v'))" --notes "See CHANGELOG.md for this version."
+            if ($LASTEXITCODE -ne 0) { throw 'release create failed' }
+          }
+          gh release upload $env:TAG $env:zip $env:sums --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'release upload failed' }

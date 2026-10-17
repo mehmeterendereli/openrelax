@@ -1,6 +1,6 @@
 # Interface captures
 
-These eight 680×590 screenshots are real OpenRelax 2.3.0 WinForms captures made
+These eight 680×590 screenshots are real OpenRelax 2.4.0 WinForms captures made
 by `tests/visual-smoke.ps1` on Windows 11 23H2 against its owned synthetic
 fixture, so the lists show their empty states. They are not design mock-ups or
 proof of the remaining release gates listed in the root [README](../../README.md).

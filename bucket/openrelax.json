@@ -1,0 +1,28 @@
+{
+    "version": "2.4.0",
+    "description": "Windows maintenance utility that records what made your PC spike and explains it. PowerShell + WinForms, runs from source.",
+    "homepage": "https://github.com/mehmeterendereli/openrelax",
+    "license": "MIT",
+    "notes": "Settings and records are kept in %APPDATA%\\OpenRelax and survive updates.",
+    "url": "https://github.com/mehmeterendereli/openrelax/releases/download/v2.4.0/OpenRelax-2.4.0.zip",
+    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "extract_dir": "OpenRelax-2.4.0",
+    "shortcuts": [
+        [
+            "launch.bat",
+            "OpenRelax",
+            "",
+            "docs\\openrelax.ico"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/mehmeterendereli/openrelax"
+    },
+    "autoupdate": {
+        "url": "https://github.com/mehmeterendereli/openrelax/releases/download/v$version/OpenRelax-$version.zip",
+        "hash": {
+            "url": "https://github.com/mehmeterendereli/openrelax/releases/download/v$version/SHA256SUMS"
+        },
+        "extract_dir": "OpenRelax-$version"
+    }
+}
