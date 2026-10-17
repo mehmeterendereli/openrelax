@@ -340,6 +340,87 @@ Case 'notifications: baseline, new spike once, at most one per 15 minutes' {
 }
 #endregion
 
+#region Embedded spike sampler
+. ([scriptblock]::Create((Get-TestFunctionSource @('Read-ProcessCpuSample','Measure-ProcessCpu','New-SpikeTracker','Step-SpikeTracker','Round-Share','New-SpikeRecord','Add-TrapRecord','Set-TrapHeartbeat','Protect-CommandLine','Test-ScheduledParent'))))
+Case 'process CPU is matched by PID, not by instance name' {
+    # chrome#3 (pid 11) became chrome#2 after pid 10 exited; pid 12 started in between.
+    $before = @{ At = (Get-Date); Ts100 = [long]0; ByPid = @{ 10 = @{ Instance = 'chrome#2'; Raw = [long]0 }; 11 = @{ Instance = 'chrome#3'; Raw = [long]1000000 } } }
+    $after  = @{ At = (Get-Date); Ts100 = [long]20000000; ByPid = @{ 11 = @{ Instance = 'chrome#2'; Raw = [long]9000000 }; 12 = @{ Instance = 'python'; Raw = [long]4000000 } } }
+    $rows = @(Measure-ProcessCpu $before $after 4)
+    $chrome = @($rows | Where-Object { $_.Pid -eq 11 })
+    Assert-True ($chrome.Count -eq 1 -and [Math]::Abs($chrome[0].Pct - 10) -lt 0.01) ('chrome: ' + ($rows | ForEach-Object { '{0}:{1}' -f $_.Pid, $_.Pct }))
+    Assert-True (@($rows | Where-Object { $_.Pid -eq 12 })[0].Pct -eq 5) 'A process started during the window was not counted from zero.'
+    Assert-True (@($rows | Where-Object { $_.Pid -eq 10 }).Count -eq 0) 'An exited process was reported.'
+    Assert-True ($rows[0].Pid -eq 11) 'Rows are not sorted by share.'
+}
+Case 'idle and total are excluded' {
+    $before = @{ At = (Get-Date); Ts100 = [long]0; ByPid = @{ 0 = @{ Instance = 'Idle'; Raw = [long]0 }; 4 = @{ Instance = 'System'; Raw = [long]0 } } }
+    $after  = @{ At = (Get-Date); Ts100 = [long]10000000; ByPid = @{ 0 = @{ Instance = 'Idle'; Raw = [long]9000000 }; 4 = @{ Instance = 'System'; Raw = [long]100000 } } }
+    $rows = @(Measure-ProcessCpu $before $after 1)
+    Assert-True ($rows.Count -eq 1 -and $rows[0].Instance -eq 'System') ('Rows: ' + ($rows | ForEach-Object { $_.Instance }))
+}
+Case 'tracker arms, starts after the sustain window and ends after cooling' {
+    $state = New-SpikeTracker 85 4 2
+    $t = Get-Date '2026-10-17T10:00:00'
+    $actions = foreach ($cpu in 90,90,90,40,40) { $t = $t.AddSeconds(2); Step-SpikeTracker $state $cpu $t }
+    Assert-True (($actions -join ',') -eq 'arm,start,,,end') ('Actions: ' + ($actions -join ','))
+    Assert-True ($state.Spikes -eq 1 -and $state.Peak -eq 90 -and -not $state.InSpike) 'Tracker state is wrong after the spike.'
+    $again = foreach ($cpu in 90,40,90) { $t = $t.AddSeconds(2); Step-SpikeTracker $state $cpu $t }
+    Assert-True (($again -join ',') -eq 'arm,,arm') ('A single hot sample started a spike: ' + ($again -join ','))
+}
+Case 'tracker reports ongoing every 120 s' {
+    $state = New-SpikeTracker 85 4 2
+    $t = Get-Date '2026-10-17T10:00:00'
+    $actions = foreach ($i in 1..70) { $t = $t.AddSeconds(2); Step-SpikeTracker $state 95 $t }
+    Assert-True (@($actions | Where-Object { $_ -eq 'start' }).Count -eq 1 -and @($actions | Where-Object { $_ -eq 'ongoing' }).Count -eq 1) ('Actions: ' + (($actions | Where-Object { $_ }) -join ','))
+}
+$recordProcesses = @{
+    40 = @{ Name = 'python.exe'; ParentPid = 30; CommandLine = 'python C:\work\train.py --api-key=SECRET' }
+    30 = @{ Name = 'svchost.exe'; ParentPid = 4; CommandLine = 'C:\WINDOWS\system32\svchost.exe -k netsvcs -p -s Schedule' }
+}
+$recordRows = @(
+    @{ Pid = 40; Instance = 'python'; Pct = 61.234 }, @{ Pid = 77; Instance = 'chrome#2'; Pct = 12 }, @{ Pid = 78; Instance = 'a'; Pct = 3 },
+    @{ Pid = 79; Instance = 'b'; Pct = 2 }, @{ Pid = 80; Instance = 'c'; Pct = 1.5 }, @{ Pid = 81; Instance = 'd'; Pct = 1.2 }, @{ Pid = 82; Instance = 'e'; Pct = 0.4 })
+Case 'record keeps the 2.3 contract and adds dpc/interrupt' {
+    $script:RecordCommandLines = $false
+    $record = New-SpikeRecord 'start' (Get-Date '2026-10-17T21:40:00') 4.2 96.5 $recordRows $recordProcesses 3.25 1.5
+    Assert-True ((@($record.Keys) -join ',') -eq 't,kind,window,total,attributed,dpc,interrupt,top,defender') ('Keys: ' + (@($record.Keys) -join ','))
+    Assert-True ($record.t -eq '2026-10-17T21:40:00' -and $record.dpc -eq 3.3 -and $record.interrupt -eq 1.5 -and $record.attributed -eq 81.3) 'Header fields are wrong.'
+    $top = @($record.top)
+    Assert-True ($top.Count -eq 5 -and $top[0].name -eq 'python.exe' -and $top[0].pct -eq 61.2 -and $top[0].parent -eq 'svchost.exe' -and $top[0].scheduled) 'Top process fields are wrong.'
+    Assert-True ($top[1].name -eq 'chrome.exe' -and $top[1].parent -eq '') 'Unknown processes fall back to the instance name.'
+    $json = ConvertTo-Json -InputObject $record -Compress -Depth 5
+    Assert-True ($json.StartsWith('{"t":"2026-10-17T21:40:00","kind":"start"')) $json
+}
+Case 'record omits command lines unless recording is on' {
+    $script:RecordCommandLines = $false
+    $off = New-SpikeRecord 'start' (Get-Date) 2 90 $recordRows $recordProcesses 0 0
+    Assert-True (@($off.top)[0].cmd -eq '' -and @($off.top)[0].parentCmd -eq '') 'A command line was recorded while off.'
+    $script:RecordCommandLines = $true
+    try { $on = New-SpikeRecord 'start' (Get-Date) 2 90 $recordRows $recordProcesses 0 0 } finally { $script:RecordCommandLines = $false }
+    $cmd = [string]@($on.top)[0].cmd
+    Assert-True ($cmd -match 'train\.py' -and $cmd -notmatch 'SECRET') "Recorded: $cmd"
+}
+Case 'records append as one JSON line each, heartbeat replaces atomically' {
+    $dir = Join-Path $Work 'sampler-out'
+    $script:RecordCommandLines = $false
+    Add-TrapRecord $dir ([ordered]@{ t = '2026-10-17T10:00:00'; kind = 'monitor'; version = 'test' })
+    Add-TrapRecord $dir (New-SpikeRecord 'start' (Get-Date '2026-10-17T10:00:10') 2 90 $recordRows $recordProcesses 0 0)
+    $lines = @([IO.File]::ReadAllLines((Join-Path $dir 'spikes-2026-10.jsonl')) | Where-Object { $_ })
+    Assert-True ($lines.Count -eq 2 -and $lines[1].StartsWith('{"t":"2026-10-17T10:00:10"')) "Lines: $($lines.Count)"
+    $bytes = [IO.File]::ReadAllBytes((Join-Path $dir 'spikes-2026-10.jsonl'))
+    Assert-True ($bytes[0] -eq [byte][char]'{') 'The record file starts with a BOM.'
+    Set-TrapHeartbeat $dir ([ordered]@{ t = '2026-10-17T10:01:00'; threshold = 85; spikes = 1 })
+    Set-TrapHeartbeat $dir ([ordered]@{ t = '2026-10-17T10:02:00'; threshold = 85; spikes = 2 })
+    $beat = Get-Content -LiteralPath (Join-Path $dir 'durum.json') -Raw | ConvertFrom-Json
+    Assert-True ($beat.spikes -eq 2 -and @(Get-ChildItem -LiteralPath $dir -Filter '*.tmp').Count -eq 0) 'Heartbeat was not replaced cleanly.'
+}
+Case 'a live PDH read sees more than 10 processes and includes this process' {
+    $sample = Read-ProcessCpuSample
+    Assert-True ($sample.ByPid.Count -gt 10 -and $sample.ByPid.ContainsKey($PID) -and $sample.Ts100 -gt 0) "Processes: $($sample.ByPid.Count)"
+}
+#endregion
+
 #region Worker sources
 function Get-WorkerSource([string]$Name) {
     $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'),[ref]$null,[ref]$null)
