@@ -62,13 +62,15 @@ try {
     Assert ((Test-Path -LiteralPath $old) -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'SelfTest modified fixture data.'
     Write-Host 'Real SelfTest OK: fixture files, settings and log unchanged.'
     $conflicting = Start-FixtureApp $fixture.Path '-SelfTest -AutoClean'
-    Assert ($conflicting.ExitCode -ne 0 -and $conflicting.Stderr -match 'cannot be combined') 'Conflicting modes were accepted.'
+    # Error records wrap at the console width, which depends on the checkout path:
+    # compare stderr text with all whitespace removed.
+    Assert ($conflicting.ExitCode -ne 0 -and (($conflicting.Stderr -replace '\s+','') -match 'cannotbecombined')) 'Conflicting modes were accepted.'
     Assert ((Get-FileHash -LiteralPath $settingsFile).Hash -eq $settingsHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash -and (Get-Item -LiteralPath $old).Length -eq 4096 -and [IO.File]::ReadAllText($fresh) -eq 'keep') 'Conflicting modes changed state or target files.'
     Write-Host 'Conflicting SelfTest/AutoClean refused before mutation.'
     [IO.File]::WriteAllText($settingsFile,'{"language":')
     $badHash = (Get-FileHash -LiteralPath $settingsFile).Hash
     $bad = Start-FixtureApp $fixture.Path '-AutoClean'
-    Assert ($bad.ExitCode -eq 1 -and $bad.Stderr -match 'AutoClean stopped') 'Invalid settings did not stop AutoClean.'
+    Assert ($bad.ExitCode -eq 1 -and (($bad.Stderr -replace '\s+','') -match 'AutoCleanstopped')) 'Invalid settings did not stop AutoClean.'
     Assert ((Test-Path -LiteralPath $old) -and (Get-FileHash -LiteralPath $settingsFile).Hash -eq $badHash -and (Get-FileHash -LiteralPath $logFile).Hash -eq $logHash) 'Invalid settings caused a mutation.'
     Write-SettingsAtomic $settings $settingsFile
     $clean = Start-FixtureApp $fixture.Path '-AutoClean'
