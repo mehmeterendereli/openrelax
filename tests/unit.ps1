@@ -200,6 +200,146 @@ Case '2.2 logs in the trap root move into logs, root lines first' {
 }
 #endregion
 
+#region Fotokapan diagnosis, report and notifications
+# Localization stub: the key plus its format slots, so tests assert structure, not wording.
+$StubSlots = @{ reportGenerated = 2; reportStatus = 2; trapSec = 1 }
+function T([string]$Key) {
+    $n = 4
+    if ($StubSlots.ContainsKey($Key)) { $n = $StubSlots[$Key] }
+    return $Key + (-join (0..($n - 1) | ForEach-Object { '|{' + $_ + '}' }))
+}
+function New-Start([string]$T,[string]$Name,[double]$Pct,[double]$Total = 98,[double]$Attributed = 90,$Defender = $null,[string]$Parent = '',[bool]$Scheduled = $false) {
+    return [pscustomobject]@{ t = $T; kind = 'start'; total = $Total; attributed = $Attributed; defender = $Defender
+        top = @([pscustomobject]@{ name = $Name; pct = $Pct; parent = $Parent; scheduled = $Scheduled; cmd = ''; parentCmd = '' }) }
+}
+function New-End([string]$T,[int]$Sec = 10,[int]$Peak = 95) { return [pscustomobject]@{ t = $T; kind = 'end'; durationSec = $Sec; peak = $Peak } }
+. ([scriptblock]::Create((Get-TestFunctionSource @('Get-TrapEpisodes','Get-TrapCulprit','Get-TrapCulprits','ConvertFrom-TrapTime','Get-TrapCulpritText','Get-TrapCategory','Test-TrapScheduled','Get-TrapDiagnosis','Format-TrapFinding','Get-TrapHourHistogram','Format-TrapReport','Save-TrapReport','Get-TrapNotification'))))
+
+Case 'episodes pair starts and ends, restarts and new starts cut open ones' {
+    $recs = @(
+        [pscustomobject]@{ t = '2026-10-01T08:00:00'; kind = 'monitor' },
+        (New-Start '2026-10-01T09:00:00' 'codex.exe' 40), (New-End '2026-10-01T09:00:12'),
+        (New-Start '2026-10-01T10:00:00' 'MsMpEng.exe' 70),
+        (New-Start '2026-10-01T11:00:00' 'chrome.exe' 20 -Attributed 30), (New-End '2026-10-01T11:00:09'),
+        (New-Start '2026-10-01T12:00:00' 'java.exe' 50),
+        [pscustomobject]@{ t = '2026-10-01T13:00:00'; kind = 'monitor' })
+    $eps = Get-TrapEpisodes $recs
+    Assert-True ($eps.Count -eq 4 -and $eps[0].Duration -eq 10 -and -not $eps[0].Cut -and $eps[1].Cut -and $eps[3].Cut) 'Episodes were paired wrongly.'
+    Assert-True ((Get-TrapCulprit $eps[2].Start).Name -eq '*unattributed*') 'Residual CPU was not reported as unattributed.'
+    $c = @(Get-TrapCulprits $eps)
+    Assert-True ((($c | ForEach-Object { $_.Count }) | Measure-Object -Sum).Sum -eq 4) 'Culprit ranking miscounted.'
+}
+Case 'categories by process name' {
+    Assert-True ((Get-TrapCategory 'MsMpEng.exe') -eq 'defender' -and (Get-TrapCategory 'TFTClient-Win64-Shipping.exe') -eq 'game' -and (Get-TrapCategory 'codex.exe') -eq 'devtools' -and (Get-TrapCategory 'python.exe') -eq 'devtools') 'Known names were miscategorised.'
+    Assert-True ((Get-TrapCategory 'msedge.exe') -eq 'browser' -and (Get-TrapCategory 'TiWorker.exe') -eq 'windows' -and (Get-TrapCategory 'foo.exe') -eq 'other') 'Known names were miscategorised.'
+}
+Case 'scheduled flag and 2.2 parent command lines are both recognised' {
+    Assert-True (Test-TrapScheduled ([pscustomobject]@{ name = 'x.exe'; scheduled = $true })) 'The recorded flag was ignored.'
+    Assert-True (-not (Test-TrapScheduled ([pscustomobject]@{ name = 'x.exe'; parent = 'taskhostw.exe'; scheduled = $false }))) 'The recorded flag was overridden.'
+    Assert-True (Test-TrapScheduled ([pscustomobject]@{ parent = 'svchost.exe'; parentCmd = 'C:\WINDOWS\system32\svchost.exe -k netsvcs -p -s Schedule' })) 'A 2.2 record was not recognised.'
+    Assert-True (Test-TrapScheduled ([pscustomobject]@{ parent = 'taskhostw.exe' })) 'A record without parentCmd failed.'
+    Assert-True (-not (Test-TrapScheduled ([pscustomobject]@{ parent = 'explorer.exe' })) -and -not (Test-TrapScheduled $null)) 'A non-task parent was called scheduled.'
+}
+$diagEpisodes = New-Object System.Collections.Generic.List[object]
+$defTop = [pscustomobject]@{ processes = @(); folders = @([pscustomobject]@{ path = 'C:\u\.codex\sessions'; count = 12; ms = 95 }) }
+foreach ($i in 0..4) {
+    $s = New-Start ('2026-10-01T0{0}:00:00' -f $i) 'MsMpEng.exe' 70 -Defender 'realtime'
+    if ($i -eq 4) { $s | Add-Member -NotePropertyName defenderTop -NotePropertyValue $defTop }
+    $diagEpisodes.Add(@{ Start = $s; Defender = 'realtime'; Duration = 10; Peak = 95; Cut = $false })
+}
+foreach ($i in 5..7) { $diagEpisodes.Add(@{ Start = (New-Start ('2026-10-01T{0:D2}:00:00' -f ($i + 9)) 'chrome.exe' 20 -Attributed 30); Defender = $null; Duration = 10; Peak = 95; Cut = $false }) }
+$diagEpisodes.Add(@{ Start = (New-Start '2026-10-01T15:00:00' 'codex.exe' 50 -Parent 'taskhostw.exe' -Scheduled $true); Defender = $null; Duration = $null; Peak = $null; Cut = $true })
+$diagEpisodes.Add(@{ Start = (New-Start '2026-10-01T15:30:00' 'codex.exe' 40); Defender = $null; Duration = 10; Peak = 95; Cut = $false })
+Case 'findings sorted by count with shares; unattributed CPU is its own category' {
+    $d = @(Get-TrapDiagnosis $diagEpisodes)
+    Assert-True ($d.Count -ge 4 -and $d[0].Category -eq 'defender' -and $d[0].Count -eq 5 -and $d[0].Share -eq 50) (($d | ForEach-Object { '{0}:{1}' -f $_.Category, $_.Count }) -join ' ')
+    Assert-True ($d[1].Category -eq 'unattributed' -and $d[1].Key -eq 'diag_unattributed' -and $d[1].Count -eq 3) 'Unattributed CPU was not reported honestly.'
+    Assert-True (@($d | Where-Object { $_.Category -eq 'drivers' }).Count -eq 0) 'A drivers category was still produced.'
+}
+Case 'real-time Defender finding names the most-scanned folder' {
+    $d = @(Get-TrapDiagnosis $diagEpisodes)
+    Assert-True ($d[0].Key -eq 'diag_defender_rt' -and $d[0].Detail -eq 'C:\u\.codex\sessions') 'The scanned folder was lost.'
+    Assert-True ((Format-TrapFinding $d[0]) -eq 'diag_defender_rt|50|MsMpEng.exe|C:\u\.codex\sessions|5') (Format-TrapFinding $d[0])
+}
+Case 'scheduled finding counts task-started spikes' {
+    $d = @(Get-TrapDiagnosis $diagEpisodes)
+    Assert-True (@($d | Where-Object { $_.Category -eq 'scheduled' -and $_.Count -eq 1 -and $_.Top -eq 'codex.exe' }).Count -eq 1) 'Scheduled spikes were miscounted.'
+}
+Case 'scan-dominated Defender finding advises moving scans' {
+    $scanEp = New-Object System.Collections.Generic.List[object]
+    $scanEp.Add(@{ Start = (New-Start '2026-10-02T10:00:00' 'MsMpEng.exe' 80 -Defender 'scan'); Defender = 'scan' })
+    Assert-True ((@(Get-TrapDiagnosis $scanEp))[0].Key -eq 'diag_defender_scan') 'Scan advice missing.'
+}
+Case '2.2.1 records with parentCmd and *drivers* still diagnose' {
+    $legacy = [pscustomobject]@{ t = '2026-10-03T10:00:00'; kind = 'start'; total = 90; attributed = 10; defender = $null
+        top = @([pscustomobject]@{ name = 'python.exe'; pid = 1; pct = 8; parent = 'svchost.exe'; cmd = ''; parentCmd = 'svchost.exe -k netsvcs -s Schedule' }) }
+    $legacyDrivers = [pscustomobject]@{ t = '2026-10-03T11:00:00'; kind = 'start'; total = 90; attributed = 85; defender = $null
+        top = @([pscustomobject]@{ name = '*drivers*'; pid = 0; pct = 60; parent = ''; cmd = '' }) }
+    $eps = New-Object System.Collections.Generic.List[object]
+    $eps.Add(@{ Start = $legacy; Defender = $null }); $eps.Add(@{ Start = $legacyDrivers; Defender = $null })
+    $d = @(Get-TrapDiagnosis $eps)
+    Assert-True (@($d | Where-Object { $_.Category -eq 'unattributed' }).Count -eq 1 -and @($d | Where-Object { $_.Category -eq 'unattributed' })[0].Count -eq 2) (($d | ForEach-Object { '{0}:{1}' -f $_.Category, $_.Count }) -join ' ')
+    Assert-True ((Get-TrapCulpritText '*drivers*') -eq (Get-TrapCulpritText '*unattributed*')) 'Legacy and new unattributed names read differently.'
+}
+Case 'hour histogram has 24 buckets counting starts' {
+    $h = Get-TrapHourHistogram $diagEpisodes
+    Assert-True ($h.Count -eq 24 -and $h[0] -eq 1 -and $h[15] -eq 3 -and (($h | Measure-Object -Sum).Sum) -eq 10) ($h -join ',')
+}
+Case 'no episodes, no findings' {
+    Assert-True (@(Get-TrapDiagnosis (New-Object System.Collections.Generic.List[object])).Count -eq 0) 'Findings from nothing.'
+}
+Case 'records of a not yet migrated 2.2 install are read from the legacy root' {
+    . ([scriptblock]::Create((Get-TestFunctionSource @('Read-SharedText','Read-TrapRecords'))))
+    $script:TrapCache = @{}
+    $root = Join-Path $Work 'trap-legacy'; $logs = Join-Path $root 'logs'
+    [void][IO.Directory]::CreateDirectory($logs)
+    $now = (Get-Date).AddMinutes(-5).ToString('s'); $month = 'spikes-{0:yyyy-MM}.jsonl' -f (Get-Date)
+    [IO.File]::WriteAllText((Join-Path $root $month),('{"t":"' + $now + '","kind":"start","total":90,"attributed":80,"top":[]}' + "`n"))
+    [IO.File]::WriteAllText((Join-Path $logs $month),('{"t":"' + $now + '","kind":"end","durationSec":5,"peak":91}' + "`n"))
+    $records = Read-TrapRecords -Dir $logs -LegacyDir $root
+    Assert-True ($records.Count -eq 2 -and [string]$records[0].kind -eq 'start') "Read $($records.Count) records."
+    Assert-True ((Read-TrapRecords -Dir $logs).Count -eq 1) 'Without a legacy folder only logs\ is read.'
+}
+$script:AppVersion = '2.3.0'
+$trapState = @{ Installed = $true; Running = $true; Outdated = $false; Threshold = 85; Beat = (Get-Date '2026-10-01T16:00:00') }
+Case 'report has title, diagnosis, culprit and spike sections, every episode once' {
+    $md = Format-TrapReport $trapState $diagEpisodes
+    Assert-True ($md -match '(?m)^# reportTitle' -and $md -match '(?m)^## reportDiagnosis' -and $md -match '(?m)^## reportTop' -and $md -match '(?m)^## reportRecent') 'A report section is missing.'
+    Assert-True (([regex]::Matches($md,'(?m)^\| 01\.10 ')).Count -eq 10) 'Episodes are not listed once each.'
+    Assert-True ($md -match 'reportStatus\|trapStRunning\S*\|85') 'The trap status is missing.'
+}
+Case 'report states an outdated trap' {
+    $outdated = @{ Installed = $true; Running = $true; Outdated = $true; Threshold = 85 }
+    Assert-True ((Format-TrapReport $outdated $diagEpisodes) -match 'reportStatus\|trapStOutdated') 'An outdated trap was reported as current.'
+}
+Case 'pipes in process names cannot break table rows' {
+    $pipeEp = New-Object System.Collections.Generic.List[object]
+    $pipeEp.Add(@{ Start = (New-Start '2026-10-03T10:00:00' 'a|b.exe' 50); Defender = $null; Duration = 5; Peak = 90 })
+    Assert-True ((Format-TrapReport $trapState $pipeEp) -match 'a\\\|b\.exe') 'A pipe broke the table.'
+}
+Case 'report saved as UTF-8 markdown, content unchanged' {
+    $md = Format-TrapReport $trapState $diagEpisodes
+    $path = Save-TrapReport $md (Join-Path $Work 'reports')
+    Assert-True ((Test-Path -LiteralPath $path) -and $path -like '*.md' -and [IO.File]::ReadAllText($path) -eq $md) 'The saved report differs.'
+}
+Case 'notifications: baseline, new spike once, at most one per 15 minutes' {
+    $nr = New-Object System.Collections.Generic.List[object]
+    $nr.Add((New-Start '2026-10-01T09:00:00' 'codex.exe' 40))
+    $now = Get-Date '2026-10-01T09:01:00'
+    $n1 = Get-TrapNotification $nr $null ([datetime]::MinValue) $now
+    Assert-True (-not $n1.Show -and $n1.LastT -eq '2026-10-01T09:00:00') 'History was announced on the first look.'
+    $nr.Add((New-Start '2026-10-01T09:05:00' 'java.exe' 50)); $nr.Add((New-End '2026-10-01T09:05:10'))
+    $n2 = Get-TrapNotification $nr $n1.LastT ([datetime]::MinValue) $now
+    Assert-True ($n2.Show -and $n2.Record.top[0].name -eq 'java.exe' -and $n2.LastT -eq '2026-10-01T09:05:00') 'A new spike was not announced.'
+    Assert-True (-not (Get-TrapNotification $nr $n2.LastT ([datetime]::MinValue) $now).Show) 'A spike was announced twice.'
+    $nr.Add((New-Start '2026-10-01T09:07:00' 'node.exe' 30))
+    $n4 = Get-TrapNotification $nr $n2.LastT $now.AddMinutes(-5) $now
+    Assert-True (-not $n4.Show -and $n4.LastT -eq '2026-10-01T09:07:00') 'The 15-minute limit was not kept.'
+    $n5 = Get-TrapNotification (New-Object System.Collections.Generic.List[object]) $null ([datetime]::MinValue) $now
+    Assert-True (-not $n5.Show -and $null -eq $n5.LastT) 'Nothing was announced from no records.'
+}
+#endregion
+
 #region Worker sources
 function Get-WorkerSource([string]$Name) {
     $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'),[ref]$null,[ref]$null)

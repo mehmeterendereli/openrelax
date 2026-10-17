@@ -52,6 +52,7 @@ $script:IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.Wind
 #region 1. Settings and shared core
 . (Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1')
 . (Join-Path $PSScriptRoot 'lib\OpenRelax.Engine.ps1')
+. (Join-Path $PSScriptRoot 'lib\OpenRelax.Trap.ps1')
 $settingsDocument = Read-SettingsDocument $script:SettingsFile
 $script:Settings = $settingsDocument.Settings
 $script:SettingsValid = $settingsDocument.Valid
@@ -514,20 +515,11 @@ $script:TrapRoot     = Join-Path $env:ProgramData 'OpenRelax\Fotokapan'
 $script:TrapDir      = Join-Path $script:TrapRoot 'logs'
 $script:TrapInstalledScript = Join-Path $script:TrapRoot 'bin\fotokapan.ps1'
 # Test hook: tests\gui-stress.ps1 points the view at a synthetic data set
-if ($env:OPENRELAX_TRAP_DIR) { $script:TrapDir = $env:OPENRELAX_TRAP_DIR }
+# Records a 2.2.x trap left in its root are read until an install moves them.
+$script:TrapLegacyDir = $(if ($script:TestMode) { '' } else { $script:TrapRoot })
+if ($env:OPENRELAX_TRAP_DIR) { $script:TrapDir = $env:OPENRELAX_TRAP_DIR; $script:TrapLegacyDir = '' }
 $script:TrapScript   = Join-Path (Split-Path -Parent $script:ScriptPath) 'fotokapan.ps1'
 $script:TrapCache    = @{}
-
-# The trap appends to / swaps these files while we read them: share everything.
-function Read-SharedText([string]$Path) {
-    $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite, Delete')
-    try {
-        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
-        return $sr.ReadToEnd()
-    } finally {
-        $fs.Dispose()
-    }
-}
 
 function Get-TrapState {
     param([string]$Dir = $script:TrapDir)
@@ -581,89 +573,6 @@ function Get-TrapState {
     return $st
 }
 
-# Records of the last $Days days, oldest first. Parsed files are cached by
-# length, so a refresh with no new spikes costs a stat call per file.
-function Read-TrapRecords {
-    param([string]$Dir = $script:TrapDir, [int]$Days = 7)
-    $cutoff = (Get-Date).AddDays(-$Days).ToString('s')
-    $all = New-Object System.Collections.Generic.List[object]
-    foreach ($month in @((Get-Date).AddMonths(-1), (Get-Date))) {
-        $path = Join-Path $Dir ('spikes-{0:yyyy-MM}.jsonl' -f $month)
-        if (-not (Test-Path -LiteralPath $path)) { continue }
-        $len = (Get-Item -LiteralPath $path).Length
-        $c = $script:TrapCache[$path]
-        if (-not $c -or $c.Length -ne $len) {
-            $items = New-Object System.Collections.Generic.List[object]
-            # Old lines are skipped by their ISO timestamp prefix without being
-            # parsed; a line still being appended has no closing brace yet.
-            $lines = @((Read-SharedText $path) -split "`n" | Where-Object {
-                $_.Length -gt 25 -and $_.StartsWith('{"t":"') -and $_.TrimEnd().EndsWith('}') -and $_.Substring(6, 19) -ge $cutoff })
-            if ($lines.Count) {
-                try {
-                    foreach ($r in ('[' + ($lines -join ',') + ']' | ConvertFrom-Json)) { $items.Add($r) }
-                } catch {
-                    # A damaged line spoils the batch parse: fall back to line by line.
-                    $items.Clear()
-                    foreach ($l in $lines) { try { $items.Add(($l | ConvertFrom-Json)) } catch {} }
-                }
-            }
-            $c = @{ Length = $len; Items = $items }
-            $script:TrapCache[$path] = $c
-        }
-        foreach ($r in $c.Items) { if ([string]$r.t -ge $cutoff) { $all.Add($r) } }
-    }
-    return , $all
-}
-
-# Pairs start/end records into episodes. A 'monitor' record (trap restarted)
-# or a new start closes an episode whose end was never written.
-function Get-TrapEpisodes {
-    param($Records)
-    $episodes = New-Object System.Collections.Generic.List[object]
-    $open = $null
-    foreach ($r in $Records) {
-        switch ([string]$r.kind) {
-            'start' {
-                if ($open) { $open.Cut = $true }
-                $open = @{ Start = $r; Duration = $null; Peak = $null; Cut = $false; Defender = $r.defender }
-                $episodes.Add($open)
-            }
-            'ongoing' { if ($open -and -not $open.Defender) { $open.Defender = $r.defender } }
-            'end'     { if ($open) { $open.Duration = $r.durationSec; $open.Peak = $r.peak; $open = $null } }
-            'monitor' { if ($open) { $open.Cut = $true; $open = $null } }
-        }
-    }
-    return , $episodes
-}
-
-# The main culprit of an episode: its top process, unless CPU time that no
-# process accounts for (exited/unreadable processes or interrupts/DPCs) outweighs it.
-function Get-TrapCulprit($Start) {
-    $top = @($Start.top | Where-Object { $_ })
-    $unattributed = [double]$Start.total - [double]$Start.attributed
-    if ($top.Count -eq 0 -or $unattributed -gt [double]$top[0].pct) {
-        return @{ Name = '*unattributed*'; Pct = [Math]::Max(0, $unattributed) }
-    }
-    return @{ Name = [string]$top[0].name; Pct = [double]$top[0].pct }
-}
-
-function Get-TrapCulprits {
-    param($Episodes)
-    $by = @{}
-    foreach ($ep in $Episodes) {
-        $c = Get-TrapCulprit $ep.Start
-        $e = $by[$c.Name]
-        if (-not $e) { $e = @{ Name = $c.Name; Count = 0; Sum = 0.0; Last = '' }; $by[$c.Name] = $e }
-        $e.Count++
-        $e.Sum += $c.Pct
-        if ([string]$ep.Start.t -gt $e.Last) { $e.Last = [string]$ep.Start.t }
-    }
-    return @($by.Values | Sort-Object -Property @{ Expression = { $_.Count }; Descending = $true }, @{ Expression = { $_.Sum }; Descending = $true })
-}
-
-function ConvertFrom-TrapTime([string]$Iso) {
-    return [datetime]::ParseExact($Iso, 's', [System.Globalization.CultureInfo]::InvariantCulture)
-}
 #endregion
 
 #region 6. Headless modes (-AutoClean / -SelfTest) - no GUI is loaded
@@ -707,7 +616,7 @@ if ($SelfTest) {
     $beat = 'none'
     if ($ts.Beat) { $beat = $ts.Beat.ToString('yyyy-MM-dd HH:mm:ss') }
     Write-Host ("Fotokapan: installed={0} running={1} outdated={2} heartbeat={3} threshold={4}" -f $ts.Installed, $ts.Running, $ts.Outdated, $beat, $ts.Threshold)
-    $episodes = Get-TrapEpisodes (Read-TrapRecords)
+    $episodes = Get-TrapEpisodes (Read-TrapRecords -LegacyDir $script:TrapLegacyDir)
     Write-Host ("  spikes in the last 7 days: {0}" -f $episodes.Count)
     foreach ($c in (Get-TrapCulprits $episodes | Select-Object -First 3)) {
         Write-Host ("  culprit {0,-28} x{1,-4} avg {2:N0}%" -f $c.Name, $c.Count, ($c.Sum / $c.Count))
@@ -1962,11 +1871,6 @@ $script:TrapProc = $null
 $script:TrapLastState = $null
 $script:TrapSig = $null
 
-function Get-TrapCulpritText([string]$Name) {
-    if ($Name -in @('*drivers*','*unattributed*')) { return (T 'trapDrivers') }
-    return $Name
-}
-
 function Set-TrapStateLabel($St) {
     if (-not $St.Installed)  { $key = 'trapStMissing'; $color = '#94A3B8' }
     elseif ($St.Outdated)    { $key = 'trapStUpdate';  $color = '#3B82F6' }
@@ -2031,7 +1935,7 @@ function Update-TrapView {
         $st = Get-TrapState
         $script:TrapLastState = $st
         Set-TrapStateLabel $st
-        $records = Read-TrapRecords
+        $records = Read-TrapRecords -LegacyDir $script:TrapLegacyDir
         # Rebuild the lists only when the data, the language or the state changed.
         $last = ''
         if ($records.Count) { $last = [string]$records[$records.Count - 1].t }
