@@ -51,16 +51,23 @@ try {
 $trapRecords = @(Get-ChildItem -LiteralPath (Join-Path $Work 'trap') -Filter 'spikes-*.jsonl' -ErrorAction SilentlyContinue | ForEach-Object { Get-Content -LiteralPath $_.FullName } | Where-Object { $_ -match '"mode":"embedded"' })
 $avgCpu = [Math]::Round((($samples | ForEach-Object { $_.cpuPct }) | Measure-Object -Average).Average, 3)
 $maxCpu = [Math]::Round((($samples | ForEach-Object { $_.cpuPct }) | Measure-Object -Maximum).Maximum, 3)
-$growth = [Math]::Round($samples[$samples.Count - 1].privateMB - $samples[0].privateMB, 1)
+# .NET memory is a saw-tooth: it climbs between garbage collections and drops
+# at the next one, so "last minus first" measures GC timing. A leak raises the
+# floor instead: compare the lowest sample of the second half with the lowest
+# of the first half.
+$half = [int][Math]::Floor($samples.Count / 2)
+$firstFloor = (($samples | Select-Object -First ([Math]::Max(1, $half))) | ForEach-Object { $_.privateMB } | Measure-Object -Minimum).Minimum
+$secondFloor = (($samples | Select-Object -Skip $half) | ForEach-Object { $_.privateMB } | Measure-Object -Minimum).Minimum
+$growth = [Math]::Round($secondFloor - $firstFloor, 1)
 $summary = [ordered]@{
     minutes = $Minutes; samples = $samples.Count; averageCpuPctOfOneCore = $avgCpu; maxCpuPctOfOneCore = $maxCpu
-    privateMBFirst = $samples[0].privateMB; privateMBLast = $samples[$samples.Count - 1].privateMB; privateMBGrowth = $growth
+    privateMBFirst = $samples[0].privateMB; privateMBLast = $samples[$samples.Count - 1].privateMB; privateMBFloorGrowth = $growth
     workingSetMBLast = $samples[$samples.Count - 1].workingSetMB; handlesLast = $samples[$samples.Count - 1].handles; gdiLast = $samples[$samples.Count - 1].gdi
     embeddedRecorderStarted = ($trapRecords.Count -ge 1); cpuCount = [Environment]::ProcessorCount
     windows = [Environment]::OSVersion.VersionString; samplesDetail = $samples.ToArray()
 }
 if ($avgCpu -ge 1) { $failed += "average CPU $avgCpu % of one core (limit 1 %)" }
-if ($growth -ge 20) { $failed += "private memory grew $growth MB (limit 20 MB)" }
+if ($growth -ge 20) { $failed += "the private-memory floor rose $growth MB (limit 20 MB)" }
 if (-not $summary.embeddedRecorderStarted) { $failed += 'the embedded Fotokapan recorder did not start' }
 ConvertTo-Json -InputObject $summary -Depth 4 | Set-Content -LiteralPath (Join-Path $Work 'footprint.json') -Encoding UTF8
 Write-Host ''
@@ -69,7 +76,7 @@ Write-Host '| --- | ---: |'
 Write-Host ('| Average CPU (share of one core) | {0:N2} % |' -f $avgCpu)
 Write-Host ('| Highest 10-second CPU | {0:N2} % |' -f $maxCpu)
 Write-Host ('| Private memory | {0:N0} MB |' -f $summary.privateMBLast)
-Write-Host ('| Memory growth over the run | {0:N1} MB |' -f $growth)
+Write-Host ('| Memory floor growth (leak check) | {0:N1} MB |' -f $growth)
 Write-Host ('| Handles / GDI objects | {0} / {1} |' -f $summary.handlesLast, $summary.gdiLast)
 Write-Host ''
 if ($failed.Count) { Write-Host ('Footprint: FAIL - ' + ($failed -join '; ')) } else { Write-Host 'Footprint: OK' }

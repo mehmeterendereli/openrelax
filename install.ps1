@@ -82,11 +82,11 @@ try {
     $Destination = [IO.Path]::GetFullPath($Destination).TrimEnd('\')
     if ($Destination.Length -le 3) { throw 'A drive root cannot be the destination.' }
     if (Test-Path -LiteralPath $Destination) {
+        if ((Get-Item -LiteralPath $Destination -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$Destination is a link; nothing was changed." }
         $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
         if ($existing.Count -and -not (Test-Path -LiteralPath (Join-Path $Destination $marker))) {
             throw "$Destination exists and is not an OpenRelax install; nothing was changed. Choose another -Destination."
         }
-        if ((Get-Item -LiteralPath $Destination -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$Destination is a link; nothing was changed." }
         Write-Step "Replacing the earlier install in $Destination"
         foreach ($item in $existing) { Remove-InstallEntry $item }
     } else {

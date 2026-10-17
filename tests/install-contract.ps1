@@ -60,6 +60,16 @@ Case 'replacing an install removes a junction inside it without entering it' {
     Assert-True ([IO.File]::ReadAllText((Join-Path $outside 'keep.txt')) -eq 'keep') 'The junction target was deleted.'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $dest 'escape'))) 'The junction was left in the new install.'
 }
+Case 'a destination that is a link is refused without touching its target' {
+    $target = Join-Path $Work 'link-target'; [void][IO.Directory]::CreateDirectory($target)
+    [IO.File]::WriteAllText((Join-Path $target '.openrelax-install'),'pretend'); [IO.File]::WriteAllText((Join-Path $target 'keep.txt'),'keep')
+    $dest = Join-Path $Work 'dest-link'
+    New-Item -ItemType Junction -Path $dest -Target $target | Out-Null
+    $r = Invoke-Installer $good $goodSums $dest
+    Assert-True ($r.ExitCode -ne 0) 'A junction destination was accepted.'
+    Assert-True ([IO.File]::ReadAllText((Join-Path $target 'keep.txt')) -eq 'keep' -and -not (Test-Path -LiteralPath (Join-Path $target 'openrelax.ps1'))) 'The junction target was changed.'
+    [IO.Directory]::Delete($dest)
+}
 Case 'a tampered zip is refused before anything is extracted' {
     $bad = Join-Path $Work 'tampered\OpenRelax-9.9.9.zip'
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $bad))
