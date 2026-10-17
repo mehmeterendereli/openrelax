@@ -175,7 +175,8 @@ $script:Strings = @{
         logTrapFailed    = 'Fotokapan işlemi başarısız (çıkış kodu {0}).'
         logTrapCancelled = 'Yönetici izni verilmedi, işlem iptal edildi.'
         logTrapNoScript  = 'fotokapan.ps1 OpenRelax klasöründe bulunamadı.'
-        diskProgress     = 'Taranıyor {0}/{1}: {2}'
+        diskProgress     = 'Taranıyor · {0} klasör · {1}'
+        diskRootFiles    = '(kök dosyalar)'
         trayBalloon      = 'OpenRelax arka planda çalışmaya devam ediyor. Çıkmak için tepsi simgesine sağ tıklayın.'
         logStart         = 'Sistem taraması başlatıldı...'
         logAdminOn       = 'Yönetici yetkileri aktif (Tam Sistem Temizliği).'
@@ -323,7 +324,8 @@ $script:Strings = @{
         logTrapFailed    = 'Spike Trap action failed (exit code {0}).'
         logTrapCancelled = 'Administrator permission was not granted; cancelled.'
         logTrapNoScript  = 'fotokapan.ps1 was not found next to OpenRelax.'
-        diskProgress     = 'Scanning {0}/{1}: {2}'
+        diskProgress     = 'Scanning · {0} folders · {1}'
+        diskRootFiles    = '(root files)'
         trayBalloon      = 'OpenRelax keeps running in the background. Right-click the tray icon to exit.'
         logStart         = 'System scan started...'
         logAdminOn       = 'Administrator privileges active (full system cleanup).'
@@ -440,25 +442,17 @@ try {
 $script:DiskTaskCode = @'
 param($Sync, $Opt)
 try {
-    Assert-NoReparseAncestors $Opt.Target
-    $rows = @(); $issues = @(); $partial = $false; $skipped = 0; $n = 0
-    $budget = [Diagnostics.Stopwatch]::StartNew()
-    $dirs = @(Get-ChildItem -LiteralPath $Opt.Target -Directory -Force -ErrorAction Stop)
-    foreach ($d in $dirs) {
-        if (($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $skipped++; $partial = $true; continue }
-        if ($budget.Elapsed.TotalSeconds -ge 30) { $partial = $true; break }
-        $n++; $Sync.DiskProgress = @($n,$dirs.Count,$d.Name)
-        $state = @{ Partial = $false; Skipped = 0; ErrorCount = 0; Errors = @() }
-        $sz = [long]0
-        Get-SafeTreeEntries -Path $d.FullName -State $state -BudgetSec ([Math]::Max(1,[int](30 - $budget.Elapsed.TotalSeconds))) | ForEach-Object { if (-not $_.PSIsContainer) { $sz += $_.Length } }
-        $rowPartial = ($state.Partial -or $state.Skipped -or $state.ErrorCount)
-        if ($rowPartial) { $partial = $true }
-        $issues += @($state.Errors); $skipped += $state.Skipped
-        $rows += @{ Name = $d.Name; Size = $sz; Partial = [bool]$rowPartial }
-    }
-    $top = $rows | Sort-Object -Property @{ Expression = { $_.Size } } -Descending | Select-Object -First 10
-    $Sync.DiskResult = @{ Rows = @($top); Count = $n; Status = $(if ($partial) { 'Partial' } else { 'Success' }); Errors = @($issues); Skipped = $skipped }
+    # One bounded read-only walk with per-folder totals instead of a walk per folder.
+    # Files directly in the target get their own row (empty name, RootFiles).
+    $Sync.DiskRunning = $true
+    $w = Invoke-JunkWalk -Root $Opt.Target -ByTopFolder -BudgetMs 90000
+    $Sync.DiskRunning = $false
+    $rows = foreach ($k in @($w.Folders.Keys)) { @{ Name = [string]$k; Size = [long]$w.Folders[$k]; Partial = [bool]$w.Partial; RootFiles = ([string]$k -eq '') } }
+    $top = @($rows | Sort-Object -Property @{ Expression = { $_.Size } } -Descending | Select-Object -First 10)
+    $partial = $w.Partial -or $w.Skipped -or $w.ErrorCount
+    $Sync.DiskResult = @{ Rows = $top; Count = $w.Folders.Count; Status = $(if ($partial) { 'Partial' } else { 'Success' }); Errors = @($w.Errors); Skipped = $w.Skipped }
 } catch {
+    $Sync.DiskRunning = $false
     $Sync.DiskResult = @{ Rows = @(); Count = 0; Status = 'Failed'; Errors = @($_.Exception.Message); Skipped = 0 }
 }
 '@
@@ -2302,11 +2296,13 @@ function Complete-Ram {
 
 function Complete-Disk {
     param($r)
-    $script:Sync.DiskProgress = $null
+    $script:Sync.DiskRunning = $false; $script:Sync.WalkInfo = $null
     $diskDesc.Text = (T 'diskDesc')
     $lvDisk.Items.Clear()
     foreach ($row in $r.Rows) {
-        $item = New-Object System.Windows.Forms.ListViewItem($row.Name)
+        $name = [string]$row.Name
+        if ($row.ContainsKey('RootFiles') -and $row.RootFiles) { $name = (T 'diskRootFiles') }
+        $item = New-Object System.Windows.Forms.ListViewItem($name)
         $sizeText = Format-Bytes ([long]$row.Size)
         if ($row.Partial) { $sizeText = '≥ ' + $sizeText }
         [void]$item.SubItems.Add($sizeText)
@@ -2479,9 +2475,9 @@ $pump.add_Tick({
             $txt = [string]::Format((T 'btnCleaningProgress'), ([long]$script:Sync.CleanDone).ToString('N0'), (Format-Bytes ([long]$script:Sync.CleanBytes)))
             if ($btnOneClick.Text -ne $txt) { $btnOneClick.Text = $txt }
         }
-        $dp = $script:Sync.DiskProgress
-        if ($dp) {
-            $txt = [string]::Format((T 'diskProgress'), $dp[0], $dp[1], $dp[2])
+        $dp = $script:Sync.WalkInfo
+        if ($script:Sync.DiskRunning -and $dp) {
+            $txt = [string]::Format((T 'diskProgress'), ([long]$dp[0]).ToString('N0'), $dp[1])
             if ($diskDesc.Text -ne $txt) { $diskDesc.Text = $txt }
         }
         if ($script:TrapProc) { Complete-TrapAction }

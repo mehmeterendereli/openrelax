@@ -105,6 +105,26 @@ Case 'clean worker exposes live progress and always clears it' {
         Assert-True ($sync.Cleaning -eq $false -and $null -ne $sync.CleanResult) 'Progress stayed on after the worker ended.'
     }
 }
+Case 'disk walk reports root files and per-folder totals' {
+    $disk = Join-Path $Work 'disk'
+    New-OldFile (Join-Path $disk 'a\x.bin') 100; New-OldFile (Join-Path $disk 'a\deep\y.bin') 50
+    New-OldFile (Join-Path $disk 'b\z.bin') 20; New-OldFile (Join-Path $disk 'root.bin') 10
+    $sync = [hashtable]::Synchronized(@{ Beat = [DateTime]::UtcNow; Step = ''; DiskResult = $null; DiskProgress = $null })
+    $ps = [powershell]::Create()
+    try {
+        [void]$ps.AddScript('Set-StrictMode -Version 2' + "`n" + (Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Invoke-JunkWalk')))
+        [void]$ps.AddStatement().AddScript((Get-WorkerSource 'DiskTaskCode')).AddArgument($sync).AddArgument(@{ Target = $disk })
+        [void]$ps.Invoke()
+        Assert-True (-not $ps.HadErrors) ('Disk worker errors: ' + ($ps.Streams.Error -join '; '))
+    } finally { $ps.Dispose() }
+    $r = $sync.DiskResult
+    $a = @($r.Rows | Where-Object { $_.Name -eq 'a' })
+    $root = @($r.Rows | Where-Object { $_.RootFiles })
+    Assert-True ($r.Status -eq 'Success' -and $r.Count -eq 3) "Status $($r.Status), count $($r.Count)."
+    Assert-True ($a.Count -eq 1 -and $a[0].Size -eq 150 -and -not $a[0].Partial) 'Folder a was not totalled in one row.'
+    Assert-True ($root.Count -eq 1 -and $root[0].Size -eq 10 -and $root[0].Name -eq '') 'Root files have no row of their own.'
+    Assert-True ($r.Rows[0].Name -eq 'a') 'Rows are not sorted by size.'
+}
 #endregion
 
 $failed = @($script:Cases | Where-Object { -not $_.passed }).Count

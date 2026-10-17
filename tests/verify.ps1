@@ -108,7 +108,7 @@ try {
     $sync = [hashtable]::Synchronized(@{ Beat = [DateTime]::UtcNow; DiskResult = $null; DiskProgress = $null })
     $ps = [powershell]::Create()
     try {
-        $engine = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Get-SafeTreeEntries')
+        $engine = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Invoke-JunkWalk')
         [void]$ps.AddScript('Set-StrictMode -Version 2' + "`n" + $engine)
         [void]$ps.AddStatement().AddScript($workers.DiskTaskCode).AddArgument($sync).AddArgument(@{ Target = $disk.Path })
         $handle = $ps.BeginInvoke()
@@ -116,7 +116,9 @@ try {
         [void]$ps.EndInvoke($handle)
         Assert (-not $ps.HadErrors) ('Disk worker errors: ' + ($ps.Streams.Error -join '; '))
         $result = $sync.DiskResult
-        Assert ($result.Status -eq 'Partial' -and $result.Count -eq 1 -and $result.Rows.Count -eq 1 -and $result.Rows[0].Name -eq 'good' -and $result.Rows[0].Size -eq 123 -and $result.Skipped -eq 1) 'Disk worker followed a junction or misreported its result.'
+        # The fixture marker file sits at the root, so it has the root-files row.
+        $goodRow = @($result.Rows | Where-Object { $_.Name -eq 'good' }); $rootRow = @($result.Rows | Where-Object { $_.RootFiles })
+        Assert ($result.Status -eq 'Partial' -and $result.Count -eq 2 -and $result.Rows.Count -eq 2 -and $goodRow.Count -eq 1 -and $goodRow[0].Size -eq 123 -and $rootRow.Count -eq 1 -and @($result.Rows | Where-Object { $_.Name -eq 'escape' }).Count -eq 0 -and $result.Skipped -eq 1) 'Disk worker followed a junction or misreported its result.'
         Assert ((Get-Item -LiteralPath $sentinel).Length -eq 9000) 'Disk analysis changed the outside sentinel.'
     } finally { $ps.Dispose(); [IO.Directory]::Delete($link) }
     # Explicit fixture state redirection must reject an ancestor junction.

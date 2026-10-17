@@ -184,7 +184,7 @@ function Invoke-JunkWalk {
         if ($BudgetMs -gt 0 -and $ms -gt $BudgetMs) { $r.Partial = $true; break }
         if ($sync -and $ms -ge $nextBeat) {
             $nextBeat = $ms + 250
-            $sync.Beat = [DateTime]::UtcNow; $sync.Step = $dir
+            $sync.Beat = [DateTime]::UtcNow; $sync.Step = $dir; $sync.WalkInfo = @($r.Dirs, $top)
             if ($Remove) {
                 $sync.CleanDone = [long]$sync.CleanDone + ($r.Count - $sentCount)
                 $sync.CleanBytes = [long]$sync.CleanBytes + ($r.Size - $sentSize)
