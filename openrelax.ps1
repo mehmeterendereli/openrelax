@@ -163,9 +163,39 @@ $script:Strings = @{
         colPeak          = 'Tepe'
         colCulprit       = 'Sorumlu'
         colNote          = 'Not'
-        trapDrivers      = 'CPU payı atanamadı'
+        trapDrivers      = 'Atanamayan CPU (kesme/DPC, kapanmış süreçler)'
         trapNoteScan     = 'Defender taraması'
         trapNoteRealtime = 'Defender gerçek zamanlı'
+        trapNoteScheduled = 'zamanlanmış görev'
+        trapPageSummary  = 'Özet'
+        trapPageRecords  = 'Kayıtlar'
+        trapDiagTitle    = 'TEŞHİS · SON 7 GÜN'
+        trapHoursTitle   = 'SAATE GÖRE DAĞILIM'
+        btnTrapExport    = 'Raporu kaydet'
+        optTrapNotify    = 'CPU sıçramalarını bildir'
+        optTrapCmd       = 'Komut satırlarını kaydet (maskeli)'
+        logTrapCmdChanged = 'Komut satırı kaydı Fotokapan → Kur / Güncelle ile etkinleşir. Maskeleme her gizli bilgiyi yakalayamaz; kayıtlar yalnızca sizin ve yöneticilerin okuyabildiği klasörde kalır.'
+        trapBalloonTitle = 'OpenRelax · Fotokapan'
+        trapBalloon      = 'CPU sıçraması {0}: {1} (%{2})'
+        logTrapReportSaved = 'Rapor kaydedildi: {0}'
+        trapStOutdated   = 'Güncelleme var'
+        reportTitle      = 'OpenRelax Fotokapan raporu'
+        reportGenerated  = 'Oluşturma: {0} · OpenRelax {1}'
+        reportStatus     = 'Durum: {0} · eşik %{1}'
+        reportDiagnosis  = 'Teşhis (son 7 gün)'
+        reportTop        = 'En sık sorumlular'
+        reportRecent     = 'Sıçramalar'
+        diag_defender_scan = 'Sıçramaların %{0} kadarı Defender taramasından. Zamanlanmış ve elle başlatılan taramaları bilgisayarı kullanmadığınız saatlere alın.'
+        diag_defender_rt = 'Sıçramaların %{0} kadarı Defender''ın gerçek zamanlı taramasından; en çok taranan klasör: {2}. Güvendiğiniz bir çalışma klasörüyse yalnızca o klasör için dar bir istisna düşünün.'
+        diag_unattributed = 'Sıçramaların %{0} kadarında yük kaydedilen hiçbir sürece ait değil: kesmeler/DPC (sürücüler) ya da hemen kapanan süreçler olabilir. Sürücüden şüpheleniyorsanız LatencyMon ile doğrulayın.'
+        diag_game        = 'Sıçramaların %{0} kadarı oyunlardan ({1}); oyun sırasında beklenen bir yük.'
+        diag_devtools    = 'Sıçramaların %{0} kadarı geliştirici/AI araçlarından ({1}). Ağır derleme ve ajan görevlerini zamanlayın veya paralel iş sayısını sınırlayın; hangi betik olduğunu görmek için komut satırı kaydını açın.'
+        diag_browser     = 'Sıçramaların %{0} kadarı tarayıcıdan ({1}). Ağır sekme ve uzantıları tarayıcının görev yöneticisinde (Shift+Esc) bulun.'
+        diag_windows     = 'Sıçramaların %{0} kadarı Windows hizmetlerinden ({1}); güncelleme, dizinleme veya bakım görevleri olabilir.'
+        diag_other       = 'Sıçramaların %{0} kadarı {1} kaynaklı.'
+        diag_scheduled   = '{3} sıçrama zamanlanmış bir görevle başladı (en sık: {1}). Görev Zamanlayıcı''da çalışma saatlerini kontrol edin.'
+        diag_none        = 'Son 7 günde kayıtlı sıçrama yok.'
+        diagUnknownFolder = 'henüz bilinmiyor'
         trapCut          = 'kesildi'
         trapOngoing      = 'sürüyor'
         trapSec          = '{0} sn'
@@ -315,9 +345,39 @@ $script:Strings = @{
         colPeak          = 'Peak'
         colCulprit       = 'Culprit'
         colNote          = 'Note'
-        trapDrivers      = 'Drivers (interrupt/DPC)'
+        trapDrivers      = 'Unattributed CPU (interrupts/DPC, exited processes)'
         trapNoteScan     = 'Defender scan'
         trapNoteRealtime = 'Defender real-time'
+        trapNoteScheduled = 'scheduled task'
+        trapPageSummary  = 'Summary'
+        trapPageRecords  = 'Records'
+        trapDiagTitle    = 'DIAGNOSIS · LAST 7 DAYS'
+        trapHoursTitle   = 'BY HOUR OF DAY'
+        btnTrapExport    = 'Save report'
+        optTrapNotify    = 'Notify on CPU spikes'
+        optTrapCmd       = 'Record command lines (masked)'
+        logTrapCmdChanged = 'Command-line recording takes effect after Spike Trap → Install / Update. Masking cannot catch every secret; records stay in a folder only you and administrators can read.'
+        trapBalloonTitle = 'OpenRelax · Spike Trap'
+        trapBalloon      = 'CPU spike at {0}: {1} ({2}%)'
+        logTrapReportSaved = 'Report saved: {0}'
+        trapStOutdated   = 'Update available'
+        reportTitle      = 'OpenRelax Spike Trap report'
+        reportGenerated  = 'Generated {0} · OpenRelax {1}'
+        reportStatus     = 'Status: {0} · threshold {1}%'
+        reportDiagnosis  = 'Diagnosis (last 7 days)'
+        reportTop        = 'Top culprits'
+        reportRecent     = 'Spikes'
+        diag_defender_scan = 'Defender scans cause about {0}% of the spikes. Move scheduled and manual scans to hours when the PC is idle.'
+        diag_defender_rt = 'About {0}% come from Defender''s real-time scanning; most-scanned folder: {2}. If you trust that working folder, consider a narrow exclusion for it alone.'
+        diag_unattributed = 'In about {0}% the load belongs to no recorded process: interrupts/DPC (drivers) or processes that exited at once. If you suspect a driver, confirm with LatencyMon.'
+        diag_game        = 'About {0}% come from games ({1}) - expected while playing.'
+        diag_devtools    = 'About {0}% come from developer/AI tools ({1}). Schedule heavy builds and agent jobs or limit their parallelism; turn on command-line recording to see which script it is.'
+        diag_browser     = 'About {0}% come from the browser ({1}). Find heavy tabs and extensions in its task manager (Shift+Esc).'
+        diag_windows     = 'About {0}% come from Windows services ({1}): updates, indexing or maintenance.'
+        diag_other       = 'About {0}% come from {1}.'
+        diag_scheduled   = '{3} spikes started from a scheduled task (most often {1}). Check its times in Task Scheduler.'
+        diag_none        = 'No spikes recorded in the last 7 days.'
+        diagUnknownFolder = 'not known yet'
         trapCut          = 'cut off'
         trapOngoing      = 'ongoing'
         trapSec          = '{0} s'
@@ -1843,7 +1903,7 @@ function New-TrapList($Parent, $X, $Y, $W, $H, [int[]]$Widths) {
     return $lv
 }
 
-$trapCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(644, 96))
+$trapCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 4)) (New-Object System.Drawing.Size(644, 124))
 $trapTitle = New-TrapLabel $trapCard 12 10 9 $true '#94A3B8'
 $lblTrapState = New-TrapLabel $trapCard 12 26 13 $true '#94A3B8'
 $lblTrapDetail = New-TrapLabel $trapCard 12 56 9 $false '#94A3B8'
@@ -1852,20 +1912,154 @@ $lblTrapDetail.Size = New-Object System.Drawing.Size(284, 36)
 $btnTrapInstall = New-TrapButton $trapCard 304 56 '#3B82F6'
 $btnTrapRemove = New-TrapButton $trapCard 416 56 '#F87171'
 $btnTrapLog = New-TrapButton $trapCard 528 56 '#94A3B8'
+
+# Fotokapan preferences sit with the trap they configure. Changing command-line
+# recording takes effect at the next Install / Update.
+$script:TrapOptionChangedHandler = {
+    param($sender, $e)
+    if ($script:UILoading) { return }
+    $key = [string]$sender.Tag
+    $old = [bool]$script:Settings[$key]
+    $script:Settings[$key] = $sender.Checked
+    if (-not (Save-Settings)) {
+        $script:Settings[$key] = $old
+        $script:UILoading = $true
+        try { $sender.Checked = $old } finally { $script:UILoading = $false }
+        return
+    }
+    if ($key -eq 'trapRecordCommandLines') { Write-Log (T 'logTrapCmdChanged') 'warn' }
+}
+$chkTrapNotify = New-Object System.Windows.Forms.CheckBox
+$chkTrapCmd = New-Object System.Windows.Forms.CheckBox
+foreach ($trapOption in @($chkTrapNotify, $chkTrapCmd)) {
+    $trapOption.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
+    $trapOption.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#CBD5E1')
+    $trapOption.BackColor = [System.Drawing.Color]::Transparent
+    $trapOption.add_CheckedChanged($script:TrapOptionChangedHandler)
+    $trapCard.Controls.Add($trapOption)
+}
+$chkTrapNotify.Tag = 'trapNotify'; $chkTrapNotify.Location = New-Object System.Drawing.Point(14, 96); $chkTrapNotify.Size = New-Object System.Drawing.Size(250, 22)
+$chkTrapCmd.Tag = 'trapRecordCommandLines'; $chkTrapCmd.Location = New-Object System.Drawing.Point(270, 96); $chkTrapCmd.Size = New-Object System.Drawing.Size(362, 22)
+$script:UILoading = $true
+try { $chkTrapNotify.Checked = [bool]$script:Settings.trapNotify; $chkTrapCmd.Checked = [bool]$script:Settings.trapRecordCommandLines } finally { $script:UILoading = $false }
+
+function New-TrapPageButton($X, [string]$Page) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Size = New-Object System.Drawing.Size(80, 24)
+    $b.Location = New-Object System.Drawing.Point($X, 8)
+    $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $b.FlatAppearance.BorderSize = 0
+    $b.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+    $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $b.Tag = $Page
+    $trapCard.Controls.Add($b)
+    return $b
+}
+$btnTrapPageSummary = New-TrapPageButton 468 'summary'
+$btnTrapPageRecords = New-TrapPageButton 552 'records'
 Register-CardHover $trapCard
 
-$trapTopCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 106)) (New-Object System.Drawing.Size(644, 124))
+function New-TrapPage {
+    $p = New-Object System.Windows.Forms.Panel
+    $p.Location = New-Object System.Drawing.Point(0, 134)
+    $p.Size = New-Object System.Drawing.Size(644, 344)
+    $p.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#0B0F19')
+    $viewTrap.Controls.Add($p)
+    return $p
+}
+$trapPageSummary = New-TrapPage
+$trapPageRecords = New-TrapPage
+$trapPageRecords.Visible = $false
+
+# Summary page: full-width diagnosis (advice texts can run to ~200 characters),
+# then the culprit table with the hour-of-day distribution beside it.
+$trapDiagCard = Create-Card $trapPageSummary (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(644, 150))
+$trapDiagTitle = New-TrapLabel $trapDiagCard 12 8 9 $true '#94A3B8'
+$lblTrapDiag = @()
+foreach ($i in 0..2) {
+    $l = New-TrapLabel $trapDiagCard 12 (28 + $i * 40) 8.5 $false '#CBD5E1'
+    $l.AutoSize = $false
+    $l.Size = New-Object System.Drawing.Size(620, 38)
+    $lblTrapDiag += $l
+}
+Register-CardHover $trapDiagCard
+
+$trapTopCard = Create-Card $trapPageSummary (New-Object System.Drawing.Point(0, 156)) (New-Object System.Drawing.Size(644, 186))
 $trapTopTitle = New-TrapLabel $trapTopCard 12 8 9 $true '#94A3B8'
-# Column widths leave room for the vertical scrollbar (no horizontal one)
-$lvTrapTop = New-TrapList $trapTopCard 12 28 620 88 @(290, 80, 90, 120)
-$lblTrapTopEmpty = New-EmptyState $trapTopCard 60 48
+$lvTrapTop = New-TrapList $trapTopCard 12 28 392 150 @(160, 60, 75, 80)
+$lblTrapTopEmpty = New-EmptyState $trapTopCard 70 60
+$lblTrapTopEmpty.Width = 368
+$trapHoursTitle = New-TrapLabel $trapTopCard 416 8 9 $true '#94A3B8'
+$pnlTrapHours = New-Object System.Windows.Forms.Panel
+$pnlTrapHours.Location = New-Object System.Drawing.Point(416, 28)
+$pnlTrapHours.Size = New-Object System.Drawing.Size(216, 150)
+$pnlTrapHours.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#161F30')
+$pnlTrapHours.AccessibleRole = [System.Windows.Forms.AccessibleRole]::Chart
+$trapTopCard.Controls.Add($pnlTrapHours)
+$script:TrapHours = New-Object int[] 24
+# 24 bars, the busiest hour in amber; every GDI object is disposed per paint
+$pnlTrapHours.add_Paint({
+    param($sender, $e)
+    $h = $script:TrapHours
+    $max = ($h | Measure-Object -Maximum).Maximum
+    $chartH = $sender.Height - 16
+    $barW = [Math]::Floor($sender.Width / 24)
+    $bar = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#3B82F6'))
+    $peak = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#F59E0B'))
+    $axis = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#94A3B8'))
+    $font = New-Object System.Drawing.Font('Segoe UI', 7)
+    try {
+        for ($i = 0; $i -lt 24; $i++) {
+            $x = $i * $barW
+            if ($max -gt 0 -and $h[$i] -gt 0) {
+                $bh = [Math]::Max(2, [int]($chartH * $h[$i] / $max))
+                $brush = $bar
+                if ($h[$i] -eq $max) { $brush = $peak }
+                $e.Graphics.FillRectangle($brush, $x + 1, $chartH - $bh, $barW - 2, $bh)
+            }
+            if (($i % 6) -eq 0) { $e.Graphics.DrawString(('{0:D2}' -f $i), $font, $axis, [single]$x, [single]($chartH + 2)) }
+        }
+    } finally {
+        $bar.Dispose(); $peak.Dispose(); $axis.Dispose(); $font.Dispose()
+    }
+})
 Register-CardHover $trapTopCard
 
-$trapRecentCard = Create-Card $viewTrap (New-Object System.Drawing.Point(0, 238)) (New-Object System.Drawing.Size(644, 166))
-$trapRecentTitle = New-TrapLabel $trapRecentCard 12 8 9 $true '#94A3B8'
-$lvTrapRecent = New-TrapList $trapRecentCard 12 28 620 130 @(110, 80, 56, 230, 110)
-$lblTrapRecentEmpty = New-EmptyState $trapRecentCard 68 60
+# Records page: every spike of the last 7 days and the report export
+$trapRecentCard = Create-Card $trapPageRecords (New-Object System.Drawing.Point(0, 0)) (New-Object System.Drawing.Size(644, 342))
+$trapRecentTitle = New-TrapLabel $trapRecentCard 12 10 9 $true '#94A3B8'
+$btnTrapExport = New-TrapButton $trapRecentCard 512 4 '#3B82F6'
+$btnTrapExport.Size = New-Object System.Drawing.Size(120, 28)
+$lvTrapRecent = New-TrapList $trapRecentCard 12 38 620 296 @(110, 64, 56, 230, 140)
+$lblTrapRecentEmpty = New-EmptyState $trapRecentCard 140 60
 Register-CardHover $trapRecentCard
+
+function Show-TrapPage([string]$Page) {
+    $script:TrapPage = $Page
+    $trapPageSummary.Visible = ($Page -eq 'summary')
+    $trapPageRecords.Visible = ($Page -eq 'records')
+    foreach ($b in $btnTrapPageSummary, $btnTrapPageRecords) {
+        if ($b.Tag -eq $Page) {
+            $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#F8FAFC')
+            $b.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#1E293B')
+        } else {
+            $b.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
+            $b.BackColor = [System.Drawing.Color]::Transparent
+        }
+    }
+}
+$script:TrapPageClick = {
+    param($sender, $e)
+    Show-TrapPage $sender.Tag
+}
+$btnTrapPageSummary.add_Click($script:TrapPageClick)
+$btnTrapPageRecords.add_Click($script:TrapPageClick)
+Show-TrapPage 'summary'
+
+$script:TrapDiagColors = @{
+    defender = '#F59E0B'; unattributed = '#F87171'; game = '#A78BFA'; devtools = '#38BDF8'
+    browser = '#34D399'; windows = '#94A3B8'; scheduled = '#FBBF24'; other = '#CBD5E1'
+}
 
 $script:TrapProc = $null
 $script:TrapLastState = $null
@@ -1891,7 +2085,25 @@ function Update-TrapButtons {
     $btnTrapRemove.Enabled = $idle -and $script:TrapLastState -and $script:TrapLastState.Installed
 }
 
-function Update-TrapLists($Episodes, $St) {
+function Update-TrapContent($Episodes, $St) {
+    # Diagnosis: the three largest findings, coloured by category
+    $findings = @(Get-TrapDiagnosis $Episodes)
+    $script:TrapFindingCount = $findings.Count
+    for ($i = 0; $i -lt 3; $i++) {
+        $l = $lblTrapDiag[$i]
+        if ($i -lt $findings.Count) {
+            $l.Text = [char]0x2022 + ' ' + (Format-TrapFinding $findings[$i])
+            $l.ForeColor = [System.Drawing.ColorTranslator]::FromHtml($script:TrapDiagColors[[string]$findings[$i].Category])
+        } elseif ($i -eq 0) {
+            $l.Text = (T 'diag_none')
+            $l.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#94A3B8')
+        } else {
+            $l.Text = ''
+        }
+    }
+    $script:TrapHours = Get-TrapHourHistogram $Episodes
+    $pnlTrapHours.Invalidate()
+
     $lvTrapTop.BeginUpdate()
     $lvTrapTop.Items.Clear()
     foreach ($c in (Get-TrapCulprits $Episodes | Select-Object -First 8)) {
@@ -1907,7 +2119,7 @@ function Update-TrapLists($Episodes, $St) {
 
     $lvTrapRecent.BeginUpdate()
     $lvTrapRecent.Items.Clear()
-    for ($i = $Episodes.Count - 1; $i -ge [Math]::Max(0, $Episodes.Count - 30); $i--) {
+    for ($i = $Episodes.Count - 1; $i -ge 0; $i--) {
         $ep = $Episodes[$i]
         $c = Get-TrapCulprit $ep.Start
         if ($null -ne $ep.Duration) { $dur = [string]::Format((T 'trapSec'), $ep.Duration) }
@@ -1915,14 +2127,16 @@ function Update-TrapLists($Episodes, $St) {
         else { $dur = (T 'trapOngoing') }
         $peak = ''
         if ($null -ne $ep.Peak) { $peak = '{0}%' -f $ep.Peak }
-        $note = ''
-        if ($ep.Defender -eq 'scan') { $note = (T 'trapNoteScan') }
-        elseif ($ep.Defender -eq 'realtime') { $note = (T 'trapNoteRealtime') }
+        $notes = @()
+        if ($ep.Defender -eq 'scan') { $notes += (T 'trapNoteScan') }
+        elseif ($ep.Defender -eq 'realtime') { $notes += (T 'trapNoteRealtime') }
+        $top0 = @($ep.Start.top | Where-Object { $_ }) | Select-Object -First 1
+        if (Test-TrapScheduled $top0) { $notes += (T 'trapNoteScheduled') }
         $item = New-Object System.Windows.Forms.ListViewItem((ConvertFrom-TrapTime $ep.Start.t).ToString('dd.MM HH:mm:ss'))
         [void]$item.SubItems.Add($dur)
         [void]$item.SubItems.Add($peak)
         [void]$item.SubItems.Add(('{0}  {1:N0}%' -f (Get-TrapCulpritText $c.Name), $c.Pct))
-        [void]$item.SubItems.Add($note)
+        [void]$item.SubItems.Add(($notes -join ', '))
         [void]$lvTrapRecent.Items.Add($item)
     }
     $lvTrapRecent.EndUpdate()
@@ -1942,7 +2156,7 @@ function Update-TrapView {
         $sig = '{0}|{1}|{2}|{3}' -f $records.Count, $last, $script:Settings.language, $st.Running
         if ($sig -ne $script:TrapSig) {
             $script:TrapSig = $sig
-            Update-TrapLists (Get-TrapEpisodes $records) $st
+            Update-TrapContent (Get-TrapEpisodes $records) $st
         }
         Update-TrapButtons
     } catch {
@@ -2009,6 +2223,48 @@ $btnTrapLog.add_Click({
     if ($log) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $log.FullName) }
     else { Write-Log (T 'trapNoLog') 'warn' }
 })
+
+# Writes the 7-day diagnosis as Markdown (Documents\OpenRelax, or the given folder) and returns its path.
+function Export-TrapReport([string]$Folder) {
+    $text = Format-TrapReport (Get-TrapState) (Get-TrapEpisodes (Read-TrapRecords -LegacyDir $script:TrapLegacyDir))
+    if ($Folder) { return (Save-TrapReport $text $Folder) }
+    return (Save-TrapReport $text)
+}
+$btnTrapExport.add_Click({
+    try {
+        $path = Export-TrapReport
+        Write-Log ([string]::Format((T 'logTrapReportSaved'), $path)) 'success'
+        # .md may have no associated app: fall back to Notepad
+        try { Start-Process -FilePath $path } catch { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $path) }
+    } catch {
+        Write-Log ([string]::Format((T 'logError'), $_.Exception.Message)) 'error'
+    }
+})
+
+$script:TrapNotifiedT = $null
+$script:TrapNotifiedAt = [datetime]::MinValue
+$script:BalloonIsTrap = $false
+
+# Called by the monitoring timer every 30 s while trapNotify is on.
+function Invoke-TrapNotify {
+    if ($script:TestMode -or -not $script:Settings.trapNotify) { return }
+    try {
+        $n = Get-TrapNotification (Read-TrapRecords -Days 1 -LegacyDir $script:TrapLegacyDir) $script:TrapNotifiedT $script:TrapNotifiedAt (Get-Date)
+        $script:TrapNotifiedT = $n.LastT
+        if (-not $n.Show) { return }
+        $script:TrapNotifiedAt = Get-Date
+        $c = Get-TrapCulprit $n.Record
+        $script:BalloonIsTrap = $true
+        $notifyIcon.BalloonTipTitle = (T 'trapBalloonTitle')
+        $notifyIcon.BalloonTipText = [string]::Format((T 'trapBalloon'), (ConvertFrom-TrapTime $n.Record.t).ToString('HH:mm'), (Get-TrapCulpritText $c.Name), ('{0:N0}' -f $c.Pct))
+        $notifyIcon.ShowBalloonTip(5000)
+    } catch {
+        if (-not $script:TrapNotifyErrorShown) {
+            $script:TrapNotifyErrorShown = $true
+            Write-Log ([string]::Format((T 'logError'), $_.Exception.Message)) 'error'
+        }
+    }
+}
 #endregion
 
 #region 15. System tray icon
@@ -2035,6 +2291,7 @@ function Hide-ToTray {
     $form.Hide()
     if (-not $script:BalloonShown) {
         $script:BalloonShown = $true
+        $script:BalloonIsTrap = $false
         $notifyIcon.BalloonTipTitle = "OpenRelax"
         $notifyIcon.BalloonTipText = (T 'trayBalloon')
         $notifyIcon.ShowBalloonTip(2500)
@@ -2042,6 +2299,12 @@ function Hide-ToTray {
 }
 
 $notifyIcon.add_DoubleClick({ Show-MainWindow })
+# A spike balloon opens the Fotokapan tab; the tray-minimize balloon just the window.
+$notifyIcon.add_BalloonTipClicked({
+    Show-MainWindow
+    if ($script:BalloonIsTrap) { Show-View 'trap'; Show-TrapPage 'records' }
+    $script:BalloonIsTrap = $false
+})
 $miShow.add_Click({ Show-MainWindow })
 $miTrap.add_Click({ Show-MainWindow; Show-View 'trap' })
 $miClean.add_Click({ Show-MainWindow; $btnOneClick.PerformClick() })
@@ -2316,8 +2579,12 @@ if ($script:StressCycles -gt 0) {
             if ($cycle -lt $script:StressCycles) {
                 $navButtons[$s % 4].PerformClick()
                 if (($s % 4) -eq 3) {
-                    # The Fotokapan view is up: snapshot it once per language
+                    # The Fotokapan view is up: snapshot it once per language, render
+                    # both pages and export the report once into the test folder.
                     if ($cycle -lt 2) { Save-StressSnapshot ('stress-trap-{0}.png' -f $script:Settings.language) }
+                    if (($cycle % 2) -eq 0) { Show-TrapPage 'records' } else { Show-TrapPage 'summary' }
+                    $script:StressTrapPages = [int]$script:StressTrapPages + 1
+                    if ($cycle -eq 0 -and $script:StressReport) { $script:StressTrapReport = Export-TrapReport (Split-Path -Parent $script:StressReport) }
                     if ($script:Settings.language -eq 'en') { $script:Settings.language = 'tr' } else { $script:Settings.language = 'en' }
                     Apply-Language
                     if (-not $script:Sync.Busy -and ($cycle % 3) -eq 0) { Start-ScanTask; $script:StressScans++ }
@@ -2334,6 +2601,8 @@ if ($script:StressCycles -gt 0) {
                     logErrors = [int]$script:LogErrors; lastError = [string]$script:LastErrorText; tickError = [bool]$script:TickErrorShown
                     lastScanStatus = $(if ($script:LastScanResult) { $script:LastScanResult.Status } else { '' })
                     errors = $script:StressErrors.ToArray(); samples = $script:StressSamples.ToArray()
+                    trapFindings = [int]$script:TrapFindingCount; trapPageSwitches = [int]$script:StressTrapPages
+                    trapRecordRows = [int]$lvTrapRecent.Items.Count; trapReport = [string]$script:StressTrapReport
                 }
                 if ($script:StressReport) { ConvertTo-Json -InputObject $report -Depth 5 | Set-Content -LiteralPath $script:StressReport -Encoding UTF8 }
                 $script:ReallyExit = $true
@@ -2485,6 +2754,12 @@ function Apply-Language {
     $lvDisk.AccessibleName = T 'diskTitle'
     $lvTrapTop.AccessibleName = T 'trapTopTitle'
     $lvTrapRecent.AccessibleName = T 'trapRecentTitle'
+    $pnlTrapHours.AccessibleName = T 'trapHoursTitle'
+    $chkTrapNotify.AccessibleName = T 'optTrapNotify'
+    $chkTrapCmd.AccessibleName = T 'optTrapCmd'
+    $btnTrapExport.AccessibleName = T 'btnTrapExport'
+    $btnTrapPageSummary.AccessibleName = T 'trapPageSummary'
+    $btnTrapPageRecords.AccessibleName = T 'trapPageRecords'
     $script:UILoading = $true
     try { $cmbLang.SelectedIndex = if ($script:Settings.language -eq 'en') { 1 } else { 0 } } finally { $script:UILoading = $false }
 
@@ -2534,6 +2809,13 @@ function Apply-Language {
     $btnTrapInstall.Text = (T 'btnTrapInstall')
     $btnTrapRemove.Text = (T 'btnTrapRemove')
     $btnTrapLog.Text = (T 'btnTrapLog')
+    $btnTrapExport.Text = (T 'btnTrapExport')
+    $btnTrapPageSummary.Text = (T 'trapPageSummary')
+    $btnTrapPageRecords.Text = (T 'trapPageRecords')
+    $trapDiagTitle.Text = (T 'trapDiagTitle')
+    $trapHoursTitle.Text = (T 'trapHoursTitle')
+    $chkTrapNotify.Text = (T 'optTrapNotify')
+    $chkTrapCmd.Text = (T 'optTrapCmd')
     $i = 0
     foreach ($k in 'colProcess', 'colSpikes', 'colAvg', 'colLast') { $lvTrapTop.Columns[$i++].Text = (T $k) }
     $i = 0
@@ -2589,6 +2871,7 @@ $timer.add_Tick({
         if ($script:ActiveView -eq 'trap' -and $form.Visible -and ($script:TickCount % 10) -eq 0) {
             Update-TrapView
         }
+        if (($script:TickCount % 30) -eq 0) { Invoke-TrapNotify }
 
         if ($script:pulse) {
             $logoDot.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#059669')
@@ -2810,7 +3093,7 @@ if ($UiAcceptanceReportDir) {
             $checks += 'runtime-dpi-context'
             foreach ($language in 'tr','en') {
                 $script:Settings.language = $language; Apply-Language
-                foreach ($control in @($btnClose,$btnMin,$cmbLimit,$cmbLang,$logBox,$lvDisk,$lvTrapTop,$lvTrapRecent)) {
+                foreach ($control in @($btnClose,$btnMin,$cmbLimit,$cmbLang,$logBox,$lvDisk,$lvTrapTop,$lvTrapRecent,$pnlTrapHours,$chkTrapNotify,$chkTrapCmd,$btnTrapExport,$btnTrapPageSummary,$btnTrapPageRecords)) {
                     $name = [string]$control.AccessibilityObject.Name
                     if ([string]::IsNullOrWhiteSpace($name) -or $name -ne $control.AccessibleName) { throw 'Accessible name missing or inconsistent.' }
                 }

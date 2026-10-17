@@ -77,6 +77,9 @@ if (Test-Path -LiteralPath $report) {
     Check 'last background scan completed successfully' ($r.lastScanStatus -eq 'Success')
     Check 'no worker left running at exit' (-not $r.busyAtEnd)
     Check 'all requested cycles completed' ($r.cycles -eq $Cycles)
+    Check 'Fotokapan summary shows findings and both pages rendered' ($r.trapFindings -ge 3 -and $r.trapPageSwitches -ge 2 -and $r.trapRecordRows -ge 30) ('findings={0} switches={1} rows={2}' -f $r.trapFindings, $r.trapPageSwitches, $r.trapRecordRows)
+    $savedReport = [string]$r.trapReport
+    Check 'Fotokapan report exported inside the fixture' ($savedReport -and (Test-Path -LiteralPath $savedReport) -and (Test-PathWithin $savedReport $Work) -and ((Get-Content -LiteralPath $savedReport -Raw -Encoding UTF8) -match '(?m)^## ')) $savedReport
     $samples = @($r.samples)
     $warm = @($samples | Where-Object { $_.cycle -ge 10 })
     if ($Cycles -ge 12) { Check 'resource samples are present' ($warm.Count -ge 2) }
