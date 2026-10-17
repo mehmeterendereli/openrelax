@@ -3,9 +3,11 @@
 [![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
 
 Portable, MIT-licensed Windows maintenance software written in PowerShell and
-Windows Forms. Source version **2.4.0** is available from this repository
-([changelog](CHANGELOG.md)).
-No signed binary, stable release or published LTS support period is provided.
+Windows Forms. Source version **2.4.0** is in this repository; the latest
+[GitHub source release](https://github.com/mehmeterendereli/openrelax/releases/latest)
+is listed on the releases page ([changelog](CHANGELOG.md)). Releases contain
+source only: no signed binary, stable binary distribution or published LTS
+support period is provided.
 
 ## Install
 
@@ -197,7 +199,7 @@ CPU-burst tests on a busy production machine. On a disposable GitHub-hosted
 Windows Server 2025 runner, CI also performs a real Fotokapan install, starts the
 SYSTEM task, checks protected ACLs through a separate standard-user logon (read
 allowed; write/delete denied), upgrades the same reviewed source and uninstalls
-while retaining logs. See the [passing evidence run](https://github.com/mehmeterendereli/openrelax/actions/runs/38117327204).
+while retaining logs. See the [passing evidence run](https://github.com/mehmeterendereli/openrelax/actions/runs/39055301873).
 This is not validation of real Windows Update restoration, reboot persistence,
 RDP, physical keyboard use, Narrator, monitor-DPI transitions, signing, a stable
 release or LTS support. `tests\exit-smoke.ps1` also verifies that closing the
