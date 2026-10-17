@@ -29,7 +29,8 @@ function Get-TestFunctionSource {
     param([string[]]$Names)
     $repo = Split-Path -Parent $PSScriptRoot
     $functions = @{}
-    foreach ($path in @((Join-Path $repo 'openrelax.ps1'),(Join-Path $repo 'fotokapan.ps1'),(Join-Path $repo 'lib\OpenRelax.Core.ps1'))) {
+    $libraries = @(Get-ChildItem -LiteralPath (Join-Path $repo 'lib') -Filter '*.ps1' -File | Sort-Object Name | ForEach-Object { $_.FullName })
+    foreach ($path in @((Join-Path $repo 'openrelax.ps1'),(Join-Path $repo 'fotokapan.ps1')) + $libraries) {
         $tokens = $null; $errors = $null
         $ast = [Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
         if ($errors.Count) { throw "Invalid PowerShell source: $path" }

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 ORDINARY_TESTS = {
-    'tests/verify.ps1', 'tests/safety-contracts.ps1', 'tests/test-support.ps1',
+    'tests/verify.ps1', 'tests/safety-contracts.ps1', 'tests/test-support.ps1', 'tests/unit.ps1',
     'tests/engine-stress.ps1', 'tests/gui-stress.ps1', 'tests/ui-smoke.ps1',
     'tests/exit-smoke.ps1', 'tests/visual-smoke.ps1', 'tests/fotokapan-stress.ps1',
 }

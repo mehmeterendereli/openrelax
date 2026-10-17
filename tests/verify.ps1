@@ -26,21 +26,23 @@ try {
         $workers[$name] = $literal.Value
     }
     Write-Host "Parser OK: $($sources.Count) source/test files and 4 workers."
-    # A bounded child runs pure contracts and small owned synthetic file fixtures.
-    $contractInfo = [Diagnostics.ProcessStartInfo]::new()
-    $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'safety-contracts.ps1') + '" -Work "' + (Join-Path $Work 'contracts') + '" -KeepArtifacts'
-    $contractInfo.UseShellExecute = $false; $contractInfo.CreateNoWindow = $true; $contractInfo.RedirectStandardOutput = $true; $contractInfo.RedirectStandardError = $true
-    foreach ($key in @($contractInfo.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $contractInfo.EnvironmentVariables.Remove($key) } }
-    $childTemp = Join-Path $Work 'contract-temp'; [void][IO.Directory]::CreateDirectory($childTemp)
-    $contractInfo.EnvironmentVariables['TEMP'] = $childTemp; $contractInfo.EnvironmentVariables['TMP'] = $childTemp
-    $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work 'contract-module-cache'
-    $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
-    [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
-    if (-not $child.WaitForExit(60000)) { $child.Kill(); $child.WaitForExit(); throw 'Owned contract child timed out.' }
-    $code = $child.ExitCode; $text = $out.Result; $errorText = $err.Result; $child.Dispose()
-    Write-Host $text.TrimEnd()
-    Assert ($code -eq 0 -and -not $errorText -and $text -match '0 failed') ('Safety contracts failed: ' + $errorText)
+    # Bounded children run pure contracts/unit cases and small owned synthetic file fixtures.
+    foreach ($suite in @(@('safety-contracts.ps1','contracts','Safety contracts'),@('unit.ps1','unit','Unit tests'))) {
+        $contractInfo = [Diagnostics.ProcessStartInfo]::new()
+        $contractInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $contractInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot $suite[0]) + '" -Work "' + (Join-Path $Work $suite[1]) + '" -KeepArtifacts'
+        $contractInfo.UseShellExecute = $false; $contractInfo.CreateNoWindow = $true; $contractInfo.RedirectStandardOutput = $true; $contractInfo.RedirectStandardError = $true
+        foreach ($key in @($contractInfo.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $contractInfo.EnvironmentVariables.Remove($key) } }
+        $childTemp = Join-Path $Work ($suite[1] + '-temp'); [void][IO.Directory]::CreateDirectory($childTemp)
+        $contractInfo.EnvironmentVariables['TEMP'] = $childTemp; $contractInfo.EnvironmentVariables['TMP'] = $childTemp
+        $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work ($suite[1] + '-module-cache')
+        $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
+        [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
+        if (-not $child.WaitForExit(120000)) { $child.Kill(); $child.WaitForExit(); throw ('Owned child timed out: ' + $suite[2]) }
+        $code = $child.ExitCode; $text = $out.Result; $errorText = $err.Result; $child.Dispose()
+        Write-Host $text.TrimEnd()
+        Assert ($code -eq 0 -and -not $errorText -and $text -match ' 0 failed') ($suite[2] + ' failed: ' + $errorText)
+    }
     $fixture = New-TestWorkspace (Join-Path $Work 'app')
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture.Path 'state'))
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture.Path 'temp'))
@@ -86,7 +88,7 @@ try {
     $scanWorker = [powershell]::Create()
     try {
         $env:OPENRELAX_FIXTURE_ROOT = $scanFixture.Path
-        $source = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Get-JunkCategories','Get-RecycleBinInfo','Measure-JunkPaths')
+        $source = Get-TestFunctionSource @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Get-JunkCategories','Get-RecycleBinInfo','Measure-JunkPaths')
         [void]$scanWorker.AddScript('Set-StrictMode -Version 2' + "`n" + $source)
         [void]$scanWorker.AddStatement().AddScript($workers.ScanTaskCode).AddArgument($scanSync).AddArgument(@{ IsAdmin = $false })
         $handle = $scanWorker.BeginInvoke()

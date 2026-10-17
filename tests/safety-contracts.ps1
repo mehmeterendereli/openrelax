@@ -12,7 +12,7 @@ function Case([string]$Name,[scriptblock]$Action) {
     try { & $Action; $script:Cases.Add(@{ name = $Name; passed = $true }); Write-Host "PASS $Name" }
     catch { $script:Cases.Add(@{ name = $Name; passed = $false; error = $_.Exception.Message }); Write-Host "FAIL $Name`: $($_.Exception.Message)" }
 }
-$engineNames = @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Get-JunkCategories','Remove-JunkPaths','Measure-JunkPaths','Wait-ServiceState','Invoke-WindowsUpdateCacheCleanup','Invoke-Maintenance','Protect-CommandLine','New-ProtectedTrapAcl','Resolve-TrapReaderSid','Assert-SingleLinkFile','Invoke-DefenderTrace','Get-TrapCulprit')
+$engineNames = @('Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Get-JunkCategories','Remove-JunkPaths','Measure-JunkPaths','Wait-ServiceState','Invoke-WindowsUpdateCacheCleanup','Invoke-Maintenance','Protect-CommandLine','New-ProtectedTrapAcl','Resolve-TrapReaderSid','Assert-SingleLinkFile','Invoke-DefenderTrace','Get-TrapCulprit')
 . ([scriptblock]::Create((Get-TestFunctionSource $engineNames)))
 
 Case 'safe defaults and strict settings types' {

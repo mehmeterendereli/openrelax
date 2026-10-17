@@ -26,7 +26,7 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
  . (Join-Path $PSScriptRoot 'test-support.ps1')
 $workspace = New-TestWorkspace $Work
 $Work = $workspace.Path
-$names = 'Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Format-Bytes','Measure-JunkPaths','Remove-JunkPaths'
+$names = 'Test-PathWithin','Assert-NoReparseAncestors','Assert-CleanupPath','Get-SafeTreeEntries','Invoke-JunkWalk','Format-Bytes','Measure-JunkPaths','Remove-JunkPaths'
 $engine = Get-TestFunctionSource $names
 . ([scriptblock]::Create($engine))
 
