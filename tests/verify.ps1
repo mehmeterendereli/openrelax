@@ -36,7 +36,7 @@ try {
         foreach ($key in @($contractInfo.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $contractInfo.EnvironmentVariables.Remove($key) } }
         $childTemp = Join-Path $Work ($suite[1] + '-temp'); [void][IO.Directory]::CreateDirectory($childTemp)
         $contractInfo.EnvironmentVariables['TEMP'] = $childTemp; $contractInfo.EnvironmentVariables['TMP'] = $childTemp
-        $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Join-Path $Work ($suite[1] + '-module-cache')
+        $contractInfo.EnvironmentVariables['PSModuleAnalysisCachePath'] = Initialize-ModuleCache (Join-Path $Work ($suite[1] + '-module-cache'))
         $child = [Diagnostics.Process]::new(); $child.StartInfo = $contractInfo
         [void]$child.Start(); $out = $child.StandardOutput.ReadToEndAsync(); $err = $child.StandardError.ReadToEndAsync()
         if (-not $child.WaitForExit($suite[3] * 1000)) {

@@ -52,7 +52,7 @@ jobs:
            needs.elevated-fotokapan.result == 'skipped') &&
           (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: windows-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       OPENRELAX_VISUAL_DIRNAME: openrelax-visual-${{ github.run_id }}-${{ github.run_attempt }}
       OPENRELAX_EVIDENCE_DIRNAME: openrelax-evidence-${{ github.run_id }}-${{ github.run_attempt }}
