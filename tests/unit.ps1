@@ -85,6 +85,28 @@ Case 'read-only walk accepts the user profile root' {
 if (Test-Path -LiteralPath $link) { [IO.Directory]::Delete($link) }
 #endregion
 
+#region Worker sources
+function Get-WorkerSource([string]$Name) {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'),[ref]$null,[ref]$null)
+    $assignment = $ast.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq ('$script:' + $Name)},$true)
+    return $assignment.Right.Find({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst]},$true).Value
+}
+Case 'clean worker exposes live progress and always clears it' {
+    foreach ($fails in @($false,$true)) {
+        $sync = [hashtable]::Synchronized(@{ Beat = [DateTime]::UtcNow; CleanResult = $null; Cleaning = $null; CleanDone = $null; CleanBytes = $null; Seen = $null; Log = [Collections.Queue]::new() })
+        $ps = [powershell]::Create()
+        try {
+            $stub = 'function Invoke-Maintenance { param($Options) $Sync.Seen = @($Sync.Cleaning,$Sync.CleanDone,$Sync.CleanBytes); if ($Options.Fail) { throw "synthetic" }; return @{ Bytes = 5; Count = 1; Skipped = 0; Errors = @(); Status = "Success"; Ram = $null } }'
+            [void]$ps.AddScript('Set-StrictMode -Version 2' + "`n" + $stub)
+            [void]$ps.AddStatement().AddScript((Get-WorkerSource 'CleanTaskCode')).AddArgument($sync).AddArgument(@{ Fail = $fails })
+            [void]$ps.Invoke()
+        } finally { $ps.Dispose() }
+        Assert-True ($null -ne $sync.Seen -and $sync.Seen[0] -eq $true -and $sync.Seen[1] -eq 0 -and $sync.Seen[2] -eq 0) 'Progress was not reset and switched on before maintenance.'
+        Assert-True ($sync.Cleaning -eq $false -and $null -ne $sync.CleanResult) 'Progress stayed on after the worker ended.'
+    }
+}
+#endregion
+
 $failed = @($script:Cases | Where-Object { -not $_.passed }).Count
 Write-Host ("Unit: {0} cases, {1} failed." -f $script:Cases.Count, $failed)
 if (-not $KeepArtifacts) { Remove-TestWorkspace $workspace }

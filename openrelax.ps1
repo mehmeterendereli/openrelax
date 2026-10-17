@@ -101,6 +101,7 @@ $script:Strings = @{
         headerSub        = 'Seçili işlemleri gözden geçirin. Dosyalar yalnız onayınızdan sonra temizlenir.'
         btnOneClick      = 'Bakımı Gözden Geçir'
         btnCleaning      = 'Temizleniyor...'
+        btnCleaningProgress = 'Temizleniyor · {0} dosya · {1}'
         statusAdmin      = 'Durum: Yönetici Modu'
         statusUser       = 'Durum: Kullanıcı Modu'
         statusBusy       = 'Durum: Çalışıyor...'
@@ -248,6 +249,7 @@ $script:Strings = @{
         headerSub        = 'Review selected operations. Files are cleaned only after your confirmation.'
         btnOneClick      = 'Review Maintenance'
         btnCleaning      = 'Cleaning...'
+        btnCleaningProgress = 'Cleaning · {0} files · {1}'
         statusAdmin      = 'Status: Administrator Mode'
         statusUser       = 'Status: User Mode'
         statusBusy       = 'Status: Working...'
@@ -411,8 +413,17 @@ try {
 
 $script:CleanTaskCode = @'
 param($Sync, $Opt)
-try { $Sync.CleanResult = Invoke-Maintenance $Opt }
-catch { $Sync.CleanResult = @{ Bytes = 0; Count = 0; Skipped = 0; Errors = @($_.Exception.Message); Status = 'Failed'; Ram = $null } }
+# Invoke-JunkWalk adds to CleanDone/CleanBytes as it deletes; the pump shows them live.
+# Progress goes off before the result, so the pump never shows a stale count after it.
+$Sync.CleanDone = [long]0; $Sync.CleanBytes = [long]0; $Sync.Cleaning = $true
+try {
+    $result = Invoke-Maintenance $Opt
+    $Sync.Cleaning = $false
+    $Sync.CleanResult = $result
+} catch {
+    $Sync.Cleaning = $false
+    $Sync.CleanResult = @{ Bytes = 0; Count = 0; Skipped = 0; Errors = @($_.Exception.Message); Status = 'Failed'; Ram = $null }
+} finally { $Sync.Cleaning = $false }
 '@
 
 $script:RamTaskCode = @'
@@ -2440,7 +2451,7 @@ $pump.add_Tick({
                 try { $t.RS.Dispose() } catch {}
                 $script:Tasks.RemoveAt($i)
                 if ($t.TimedOut) {
-                    $script:Sync.Busy = $false
+                    $script:Sync.Busy = $false; $script:Sync.Cleaning = $false
                     $script:Sync.ScanResult = $null; $script:Sync.CleanResult = $null; $script:Sync.RamResult = $null; $script:Sync.DiskResult = $null
                     $btnOneClick.Enabled = $true; $btnOneClick.Text = (T 'btnOneClick')
                     $btnAnalyze.Enabled = $true; $btnAnalyze.Text = (T 'btnAnalyze')
@@ -2464,6 +2475,10 @@ $pump.add_Tick({
             }
         }
 
+        if ($script:Sync.Cleaning) {
+            $txt = [string]::Format((T 'btnCleaningProgress'), ([long]$script:Sync.CleanDone).ToString('N0'), (Format-Bytes ([long]$script:Sync.CleanBytes)))
+            if ($btnOneClick.Text -ne $txt) { $btnOneClick.Text = $txt }
+        }
         $dp = $script:Sync.DiskProgress
         if ($dp) {
             $txt = [string]::Format((T 'diskProgress'), $dp[0], $dp[1], $dp[2])
