@@ -124,6 +124,33 @@ Case 'test workspace refuses existing data and invalid ownership' {
     Remove-TestWorkspace $owned
     Assert-True ([IO.File]::ReadAllText($sentinel) -eq 'keep') 'Existing data changed.'
 }
+Case 'every script calls only functions defined above the call' {
+    # Scripts run top to bottom: a top-level block (the Fotokapan installer,
+    # the headless modes) cannot call a function defined further down.
+    $repo = Split-Path -Parent $PSScriptRoot
+    foreach ($script in 'fotokapan.ps1','openrelax.ps1') {
+        $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo $script),[ref]$null,[ref]$null)
+        $defined = @{}
+        foreach ($fn in $ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent.Parent -eq $ast.EndBlock -or ($n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent -eq $ast.EndBlock) },$true)) {
+            if (-not $defined.ContainsKey($fn.Name)) { $defined[$fn.Name] = $fn.Extent.StartOffset }
+        }
+        foreach ($statement in $ast.EndBlock.Statements) {
+            if ($statement -is [Management.Automation.Language.FunctionDefinitionAst]) { continue }
+            # Calls inside script-block literals (event handlers, worker code) run later.
+            $calls = $statement.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true) | Where-Object {
+                $owner = $_.Parent
+                while ($owner -and $owner -ne $statement -and -not ($owner -is [Management.Automation.Language.ScriptBlockExpressionAst]) -and -not ($owner -is [Management.Automation.Language.FunctionDefinitionAst])) { $owner = $owner.Parent }
+                $owner -eq $statement
+            }
+            foreach ($call in $calls) {
+                $name = $call.GetCommandName()
+                if ($name -and $defined.ContainsKey($name)) {
+                    Assert-True ($defined[$name] -lt $call.Extent.StartOffset) "$script line $($call.Extent.StartLineNumber) calls $name before it is defined."
+                }
+            }
+        }
+    }
+}
 Case 'opted-in command lines are masked and bounded' {
     $script:RecordCommandLines = $true
     try {

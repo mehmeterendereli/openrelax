@@ -145,6 +145,41 @@ function Install-ProtectedTrapFile {
     Set-ProtectedTrapAcl $Destination $ReaderSid $true
 }
 
+# 2.2.x kept its records, log and heartbeat next to its script in the trap
+# root; 2.3 reads them from logs\. Moves them there (a month present in both
+# keeps the older root lines first), drops a stale root heartbeat and the old
+# root script. Links are refused, like everywhere else in the task tree.
+function Move-LegacyTrapLogs {
+    param([string]$InstallDir, [string]$LogsDir)
+    Assert-NoReparseAncestors $LogsDir
+    $legacy = @(Get-ChildItem -LiteralPath $InstallDir -File -Force -ErrorAction Stop | Where-Object {
+        $_.Name -like 'spikes-*.jsonl' -or $_.Name -like 'fotokapan-*.log' -or $_.Name -eq 'durum.json' -or $_.Name -eq 'fotokapan.ps1' })
+    foreach ($file in $legacy) {
+        if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A legacy trap file is a link; migration stopped.' }
+        Assert-SingleLinkFile $file.FullName
+        $target = Join-Path $LogsDir $file.Name
+        if ($file.Name -eq 'fotokapan.ps1' -or ($file.Name -eq 'durum.json' -and (Test-Path -LiteralPath $target))) {
+            [IO.File]::Delete($file.FullName); continue
+        }
+        if (-not (Test-Path -LiteralPath $target)) { [IO.File]::Move($file.FullName, $target); continue }
+        Assert-SingleLinkFile $target
+        $older = [IO.File]::ReadAllBytes($file.FullName)
+        $newer = [IO.File]::ReadAllBytes($target)
+        $skip = 0
+        if ($newer.Length -ge 3 -and $newer[0] -eq 0xEF -and $newer[1] -eq 0xBB -and $newer[2] -eq 0xBF) { $skip = 3 }
+        $staging = Join-Path $LogsDir ('merge-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        $out = [IO.File]::Open($staging, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $out.Write($older, 0, $older.Length)
+            if ($older.Length -and $older[$older.Length - 1] -ne 10) { $out.WriteByte(10) }
+            $out.Write($newer, $skip, $newer.Length - $skip)
+            $out.Flush($true)
+        } finally { $out.Dispose() }
+        [IO.File]::Replace($staging, $target, [NullString]::Value)
+        [IO.File]::Delete($file.FullName)
+    }
+}
+
 #region Install / uninstall
 if ($Install -or $Uninstall) {
     $me = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -183,8 +218,9 @@ if ($Install -or $Uninstall) {
     foreach ($entry in $logEntries) { Set-ProtectedTrapAcl $entry.FullName $readerSid (-not $entry.PSIsContainer) }
     # Upgrading a 2.2.x install: its records sit in the trap root. They are moved
     # into logs\ only now, after every file was protected and checked for links;
-    # a merged file keeps the protected ACL of the logs\ file it replaces.
+    # moved and merged files are protected again explicitly afterwards.
     Move-LegacyTrapLogs -InstallDir $InstallDir -LogsDir $logs
+    foreach ($entry in @(Get-ChildItem -LiteralPath $logs -File -Force -ErrorAction Stop)) { Set-ProtectedTrapAcl $entry.FullName $readerSid $true }
     $installedScript = Join-Path $bin 'fotokapan.ps1'
     $installedCore = Join-Path $library 'OpenRelax.Core.ps1'
     $sourceCore = Join-Path $PSScriptRoot 'lib\OpenRelax.Core.ps1'
@@ -274,41 +310,6 @@ function Protect-CommandLine([string]$Cmd, [int]$Max = 300) {
 function Test-ScheduledParent([string]$ParentName, [string]$ParentCmd) {
     if ($ParentName -eq 'taskhostw.exe') { return $true }
     return ($ParentName -eq 'svchost.exe' -and $ParentCmd -match '\s-s\s+Schedule\b')
-}
-
-# 2.2.x kept its records, log and heartbeat next to its script in the trap
-# root; 2.3 reads them from logs\. Moves them there (a month present in both
-# keeps the older root lines first), drops a stale root heartbeat and the old
-# root script. Links are refused, like everywhere else in the task tree.
-function Move-LegacyTrapLogs {
-    param([string]$InstallDir, [string]$LogsDir)
-    Assert-NoReparseAncestors $LogsDir
-    $legacy = @(Get-ChildItem -LiteralPath $InstallDir -File -Force -ErrorAction Stop | Where-Object {
-        $_.Name -like 'spikes-*.jsonl' -or $_.Name -like 'fotokapan-*.log' -or $_.Name -eq 'durum.json' -or $_.Name -eq 'fotokapan.ps1' })
-    foreach ($file in $legacy) {
-        if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A legacy trap file is a link; migration stopped.' }
-        Assert-SingleLinkFile $file.FullName
-        $target = Join-Path $LogsDir $file.Name
-        if ($file.Name -eq 'fotokapan.ps1' -or ($file.Name -eq 'durum.json' -and (Test-Path -LiteralPath $target))) {
-            [IO.File]::Delete($file.FullName); continue
-        }
-        if (-not (Test-Path -LiteralPath $target)) { [IO.File]::Move($file.FullName, $target); continue }
-        Assert-SingleLinkFile $target
-        $older = [IO.File]::ReadAllBytes($file.FullName)
-        $newer = [IO.File]::ReadAllBytes($target)
-        $skip = 0
-        if ($newer.Length -ge 3 -and $newer[0] -eq 0xEF -and $newer[1] -eq 0xBB -and $newer[2] -eq 0xBF) { $skip = 3 }
-        $staging = Join-Path $LogsDir ('merge-' + [guid]::NewGuid().ToString('N') + '.tmp')
-        $out = [IO.File]::Open($staging, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try {
-            $out.Write($older, 0, $older.Length)
-            if ($older.Length -and $older[$older.Length - 1] -ne 10) { $out.WriteByte(10) }
-            $out.Write($newer, $skip, $newer.Length - $skip)
-            $out.Flush($true)
-        } finally { $out.Dispose() }
-        [IO.File]::Replace($staging, $target, [NullString]::Value)
-        [IO.File]::Delete($file.FullName)
-    }
 }
 
 # Cumulative CPU milliseconds per PID.
