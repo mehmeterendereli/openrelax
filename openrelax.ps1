@@ -158,6 +158,7 @@ $script:Strings = @{
         btnTrapOff       = 'Kapat'
         logTrapOn        = 'Fotokapan açık: CPU sıçramaları arka planda kaydediliyor.'
         logTrapOff       = 'Fotokapan kapatıldı.'
+        logPathRepaired  = 'Başlangıç kaydı ve haftalık görev bu klasöre yönlendirildi.'
         btnTrapInstall   = 'Kur / Güncelle'
         btnTrapRemove    = 'Eski görevi kaldır'
         btnTrapLog       = 'Klasörü aç'
@@ -350,6 +351,7 @@ $script:Strings = @{
         btnTrapOff       = 'Turn off'
         logTrapOn        = 'Spike Trap on: CPU spikes are recorded in the background.'
         logTrapOff       = 'Spike Trap turned off.'
+        logPathRepaired  = 'The startup entry and weekly task now point to this folder.'
         btnTrapInstall   = 'Install / Update'
         btnTrapRemove    = 'Remove old task'
         btnTrapLog       = 'Open folder'
@@ -658,13 +660,53 @@ try {
 #region 5. Windows integration helpers (startup entry, weekly scheduled task)
 $script:PsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
+function Get-StartupCommand { return "`"$script:PsExe`" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -StartMinimized" }
+function Get-WeeklyTaskArguments { return "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -AutoClean" }
+
+# A moved or reinstalled copy re-points the startup entry and the weekly task
+# at itself when they start a script that no longer exists (or nothing is
+# registered although the setting is on). A second copy that is merely opened
+# - a development checkout - leaves a working entry alone.
+function Test-IntegrationNeedsRepair([string]$Registered, [string]$Expected) {
+    if (-not $Registered) { return $true }
+    if (Test-IntegrationCommand $Registered $Expected) { return $false }
+    $script = Get-IntegrationScriptPath $Registered
+    return (-not $script -or -not (Test-Path -LiteralPath $script -PathType Leaf))
+}
+
+function Repair-IntegrationPaths {
+    if ($script:TestMode) { return @() }
+    $repaired = @()
+    if ($script:Settings.runAtStartup) {
+        try {
+            $runKey = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction Stop
+            $current = ''
+            if ($runKey.PSObject.Properties['OpenRelax']) { $current = [string]$runKey.OpenRelax }
+            if (Test-IntegrationNeedsRepair $current (Get-StartupCommand)) {
+                if ((Set-StartupEntry $true).Ok) { $repaired += 'startup' }
+            }
+        } catch {}
+    }
+    if ($script:Settings.weeklyClean) {
+        try {
+            $task = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object { $_.TaskName -eq 'OpenRelax Weekly Clean' }) | Select-Object -First 1
+            $arguments = ''
+            if ($task) { $arguments = [string]$task.Actions[0].Arguments }
+            if (Test-IntegrationNeedsRepair $arguments (Get-WeeklyTaskArguments)) {
+                if ((Set-WeeklyTask $true).Ok) { $repaired += 'weekly' }
+            }
+        } catch {}
+    }
+    return $repaired
+}
+
 function Set-StartupEntry {
     param([bool]$Enable)
     if ($script:TestMode) { return @{ Ok = $false; Error = 'System integration is disabled in TestMode.' } }
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     try {
         if ($Enable) {
-            $cmd = "`"$script:PsExe`" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -StartMinimized"
+            $cmd = Get-StartupCommand
             Set-ItemProperty -Path $runKey -Name 'OpenRelax' -Value $cmd -ErrorAction Stop
             return @{ Ok = $true; Key = 'logStartupOn' }
         } else {
@@ -682,7 +724,7 @@ function Set-WeeklyTask {
     $taskName = 'OpenRelax Weekly Clean'
     try {
         if ($Enable) {
-            $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"$script:ScriptPath`" -AutoClean"
+            $action = New-ScheduledTaskAction -Execute $script:PsExe -Argument (Get-WeeklyTaskArguments)
             $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '12:00'
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force -ErrorAction Stop | Out-Null
             return @{ Ok = $true; Key = 'logTaskCreated' }
@@ -3133,6 +3175,7 @@ $form.add_FormClosing({
 
 $form.add_Load({
     Write-Log (T 'logStart') 'info'
+    if (@(Repair-IntegrationPaths).Count) { Write-Log (T 'logPathRepaired') 'success' }
     if (-not $script:SettingsValid -and $settingsDocument.Exists) { Write-Log ('Settings were rejected; safe defaults are active: ' + $script:SettingsError) 'error' }
     if (-not $script:cpuCounter) { Write-Log (T 'logCpuFail') 'warn' }
 

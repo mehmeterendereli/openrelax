@@ -135,6 +135,23 @@ function Update-MaintenanceStats {
     } finally { if ($acquired) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
 }
 
+# Whether a registered command (Run key value, task arguments) still matches
+# the one this copy would write - ignoring case and runs of whitespace.
+function Test-IntegrationCommand([string]$Actual, [string]$Expected) {
+    if (-not $Actual -or -not $Expected) { return $false }
+    $a = ($Actual.Trim() -replace '\s+', ' ')
+    $e = ($Expected.Trim() -replace '\s+', ' ')
+    return $a.Equals($e, [StringComparison]::OrdinalIgnoreCase)
+}
+
+# The script a registered PowerShell command starts (-File "..."), or ''.
+function Get-IntegrationScriptPath([string]$Command) {
+    $m = [regex]::Match([string]$Command, '(?i)-File\s+(?:"([^"]+)"|(\S+))')
+    if (-not $m.Success) { return '' }
+    if ($m.Groups[1].Success) { return $m.Groups[1].Value }
+    return $m.Groups[2].Value
+}
+
 function Test-PathWithin {
     param([string]$Path, [string]$Root)
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')

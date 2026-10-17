@@ -357,6 +357,33 @@ Case 'notifications: baseline, new spike once, at most one per 15 minutes' {
 }
 #endregion
 
+#region Integration path repair
+. ([scriptblock]::Create((Get-TestFunctionSource @('Test-IntegrationCommand','Get-IntegrationScriptPath'))))
+. ([scriptblock]::Create((Get-TestFunctionSource @('Test-IntegrationNeedsRepair'))))
+Case 'only a missing or dead registration is repaired' {
+    $expected = '"C:\ps.exe" -File "C:\Apps\OpenRelax\openrelax.ps1" -StartMinimized'
+    $other = Join-Path $Work 'other-copy\openrelax.ps1'
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $other)); [IO.File]::WriteAllText($other,'# another copy')
+    Assert-True (Test-IntegrationNeedsRepair '' $expected) 'A missing registration was not repaired.'
+    Assert-True (-not (Test-IntegrationNeedsRepair $expected $expected)) 'A current registration was rewritten.'
+    Assert-True (Test-IntegrationNeedsRepair ('"C:\ps.exe" -File "' + (Join-Path $Work 'moved-away\openrelax.ps1') + '" -StartMinimized') $expected) 'A registration of a deleted folder was kept.'
+    Assert-True (-not (Test-IntegrationNeedsRepair ('"C:\ps.exe" -File "' + $other + '" -StartMinimized') $expected)) 'A working registration of another copy was taken over.'
+}
+Case 'the script a registered command starts is extracted' {
+    Assert-True ((Get-IntegrationScriptPath '"C:\ps.exe" -STA -File "C:\Old Folder\openrelax.ps1" -StartMinimized') -eq 'C:\Old Folder\openrelax.ps1') 'The quoted script path was not found.'
+    Assert-True ((Get-IntegrationScriptPath '-NoProfile -File C:\x\openrelax.ps1 -AutoClean') -eq 'C:\x\openrelax.ps1') 'An unquoted script path was not found.'
+    Assert-True ((Get-IntegrationScriptPath 'notepad.exe') -eq '') 'A command without -File produced a path.'
+}
+Case 'integration commands compare ignoring case and spacing' {
+    $expected = '"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -STA -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "C:\Apps\OpenRelax\openrelax.ps1" -StartMinimized'
+    Assert-True (Test-IntegrationCommand $expected $expected) 'An identical command was a mismatch.'
+    Assert-True (Test-IntegrationCommand ('  ' + $expected.ToLowerInvariant().Replace(' -nop', '  -nop') + ' ') $expected) 'Case or spacing made a mismatch.'
+    $moved = $expected -replace 'C:\\Apps\\OpenRelax', 'C:\Users\x\Desktop\old'
+    Assert-True (-not (Test-IntegrationCommand $moved $expected)) 'A different folder was accepted.'
+    Assert-True (-not (Test-IntegrationCommand '' $expected) -and -not (Test-IntegrationCommand $null $expected)) 'A missing command was accepted.'
+}
+#endregion
+
 #region Embedded spike sampler
 . ([scriptblock]::Create((Get-TestFunctionSource @('Read-ProcessCpuSample','Measure-ProcessCpu','New-SpikeTracker','Step-SpikeTracker','Round-Share','New-SpikeRecord','Add-TrapRecord','Set-TrapHeartbeat','Protect-CommandLine','Test-ScheduledParent'))))
 Case 'process CPU is matched by PID, not by instance name' {
