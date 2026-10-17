@@ -12,7 +12,7 @@
 param([switch]$SkipGui, [switch]$WithTrapStress)
 $ErrorActionPreference = 'Stop'
 $suite = @('verify', 'unit', 'engine-stress')
-if (-not $SkipGui) { $suite += @('ui-smoke', 'exit-smoke', 'visual-smoke', 'gui-stress') }
+if (-not $SkipGui) { $suite += @('ui-smoke', 'exit-smoke', 'visual-smoke', 'gui-stress', 'footprint') }
 if ($WithTrapStress) { $suite += 'fotokapan-stress' }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -30,7 +30,8 @@ foreach ($name in $suite + 'elevated-fotokapan') {
     Write-Host ''
     Write-Host ('===== {0}' -f $name)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "$name.ps1")
+    $extra = @(); if ($name -eq 'footprint') { $extra = @('-Minutes', '3') }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "$name.ps1") @extra
     $outcome = 'FAIL'
     if ($LASTEXITCODE -eq 0) { $outcome = 'PASS' }
     $results.Add([pscustomobject]@{ Test = $name; Result = $outcome; Seconds = [int]$sw.Elapsed.TotalSeconds })

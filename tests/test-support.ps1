@@ -74,6 +74,31 @@ function Start-FixtureApp {
 }
 
 
+# Like Start-FixtureApp, but returns the running process (with TestStdout and
+# TestStderr tasks) instead of waiting, so a test can observe the live app.
+function Start-FixtureAppAsync {
+    param([string]$Root,[string]$Arguments,[hashtable]$Hooks = @{})
+    Assert-TestFixture $Root
+    foreach ($directory in 'state','temp','trap') { [void][IO.Directory]::CreateDirectory((Join-Path $Root $directory)) }
+    $app = Join-Path (Split-Path -Parent $PSScriptRoot) 'openrelax.ps1'
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $info.Arguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "' + $app + '" -TestMode -FixtureRoot "' + $Root + '" -StateDir "' + (Join-Path $Root 'state') + '" ' + $Arguments
+    $info.UseShellExecute = $false; $info.CreateNoWindow = $true; $info.WindowStyle = 'Hidden'
+    $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+    foreach ($key in @($info.EnvironmentVariables.Keys)) { if ($key -like 'OPENRELAX_*') { $info.EnvironmentVariables.Remove($key) } }
+    foreach ($pair in @(@('TEMP','temp'),@('TMP','temp'),@('OPENRELAX_TRAP_DIR','trap'),@('PSModuleAnalysisCachePath','module-cache'))) { $info.EnvironmentVariables[$pair[0]] = Join-Path $Root $pair[1] }
+    foreach ($key in $Hooks.Keys) {
+        if ($key -notin @('OPENRELAX_SMOKETEST')) { throw 'Unsupported fixture hook.' }
+        $info.EnvironmentVariables[$key] = [string]$Hooks[$key]
+    }
+    $process = [Diagnostics.Process]::new(); $process.StartInfo = $info
+    [void]$process.Start()
+    Add-Member -InputObject $process -MemberType NoteProperty -Name TestStdout -Value ($process.StandardOutput.ReadToEndAsync())
+    Add-Member -InputObject $process -MemberType NoteProperty -Name TestStderr -Value ($process.StandardError.ReadToEndAsync())
+    return $process
+}
+
 function Start-OwnedTestProcess {
     param([string]$Root,[string]$Arguments)
     Assert-TestFixture $Root
