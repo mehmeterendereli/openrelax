@@ -103,6 +103,17 @@ Case 'devcache paths are user-level, existing and under the 24 h rule' {
 }
 #endregion
 
+#region Settings defaults
+Case 'first-run language follows the Windows display language' {
+    $thread = [Threading.Thread]::CurrentThread
+    $original = $thread.CurrentUICulture
+    try {
+        $seen = foreach ($culture in 'tr-TR','en-US','de-DE') { $thread.CurrentUICulture = [Globalization.CultureInfo]::GetCultureInfo($culture); (Get-DefaultSettings).language }
+    } finally { $thread.CurrentUICulture = $original }
+    Assert-True (($seen -join ',') -eq 'tr,en,en') ('Languages for tr-TR, en-US, de-DE: ' + ($seen -join ','))
+}
+#endregion
+
 #region RAM trim selection
 . ([scriptblock]::Create((Get-TestFunctionSource @('Select-TrimTargets','Invoke-RamTrim'))))
 Case 'trim only idle, non-critical, non-foreground, sizeable processes' {
@@ -507,7 +518,11 @@ Case 'the sampler worker records a synthetic spike and stops on request' {
     $kinds = @($records | ForEach-Object { $_.kind })
     Assert-True ($kinds[0] -eq 'monitor' -and $kinds -contains 'start' -and $kinds[$kinds.Count - 1] -eq 'end') ('Kinds: ' + ($kinds -join ','))
     $start = @($records | Where-Object { $_.kind -eq 'start' })[0]
-    Assert-True ($start.PSObject.Properties['dpc'] -and @($start.top).Count -ge 1 -and $start.top[0].name -like '*.exe') 'The start record lacks the embedded fields.'
+    # The burner runs in this process. It need not rank first: System, vmmemWSL
+    # or another busy process can outrank one core's share on a real machine.
+    $self = @($start.top | Where-Object { $_.pid -eq $PID })
+    $top = @($start.top | ForEach-Object { '{0}[{1}]={2}' -f $_.name, $_.pid, $_.pct }) -join ' '
+    Assert-True ($start.PSObject.Properties['dpc'] -and $self.Count -eq 1 -and $self[0].name -eq ((Get-Process -Id $PID).ProcessName + '.exe')) ("The start record lacks dpc or this process (PID $PID); top: " + $top)
     Assert-True ((Get-Content -LiteralPath (Join-Path $dir 'durum.json') -Raw | ConvertFrom-Json).mode -eq 'embedded') 'No embedded heartbeat was written.'
 }
 Case 'disk walk reports root files and per-folder totals' {

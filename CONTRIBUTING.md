@@ -10,7 +10,7 @@ Keep contributions focused on a concrete behaviour and acceptance criterion.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\verify.ps1
 ```
 
-This parses all source/tests and four worker texts, runs strict synthetic
+This parses all source/tests and five worker texts, runs strict synthetic
 contracts and the real isolated SelfTest/AutoClean paths. The test creates a
 new owned workspace and refuses existing `-Work` directories. Use
 `-Work C:\your-test-root\new-directory -KeepArtifacts` to retain evidence.
@@ -54,9 +54,11 @@ result and any remaining elevated/native validation in the PR.
   prior states. Failures remain observable.
 - Typed settings are replaced atomically. State updates cannot lose statistics
   or reset the latest saved preferences. One GUI per settings path is allowed.
-- SYSTEM source files/parents have protected administrative ownership and ACLs;
+- The former SYSTEM recorder (`fotokapan.ps1`, kept for removal and its CI test):
+  its source files/parents have protected administrative ownership and ACLs;
   the reader cannot modify them. Reparse/hardlinked files fail before ACL writes.
-- No process arguments are retained. Keep diagnostic traces explicitly opt-in.
+- Process command lines are recorded only when the user opts in, and then
+  masked. Keep diagnostic traces explicitly opt-in.
 - Scans/cleanup/analysis stay outside the GUI thread; cancellation must finish
   before another maintenance task starts.
 - Test mode routes state/targets into owned fixtures and blocks system mutations.
