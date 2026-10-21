@@ -1,8 +1,10 @@
 # Security policy
 
-OpenRelax can remove files and install a SYSTEM scheduled task. Treat incorrect
-path boundaries, privilege changes and disclosure of diagnostic data as security
-issues.
+OpenRelax can remove files, register a startup entry and a weekly scheduled
+task, and record process diagnostics. Versions up to 2.3 also installed a SYSTEM
+scheduled task (Fotokapan); 2.4 and later only remove it, with one administrator
+prompt. Treat incorrect path boundaries, privilege changes and disclosure of
+diagnostic data as security issues.
 
 ## Reporting
 

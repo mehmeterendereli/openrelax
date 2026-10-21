@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **First-run language.** Without a settings file OpenRelax starts in Turkish on a Turkish Windows display language and in English otherwise (it was always Turkish). Saved settings keep their language.
+
+### Fixed
+- The sampler unit test no longer fails when a process such as `System` or `vmmemWSL` outranks the test's own CPU burner; it now looks for its own PID among the recorded culprits.
+- CI names the verified source archive after `$script:AppVersion` instead of a hard-coded `2.4.0`.
+- Stale documentation: 2.4.0 status in `PLAN.md`, opt-in masked command lines in `CONTRIBUTING.md`, the removed SYSTEM task in `SECURITY.md`, five worker texts.
+
 ## 2.4.0 — 2026-10-18
 
 Fotokapan now runs inside OpenRelax. Design: `docs/superpowers/specs/2026-10-17-openrelax-ai-growth-design.md`; plan: `docs/superpowers/plans/2026-10-17-openrelax-2.4.md`.

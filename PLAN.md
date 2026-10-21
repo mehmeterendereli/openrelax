@@ -9,7 +9,7 @@ Uygulama planları: [2.3.0](docs/superpowers/plans/2026-10-17-openrelax-2.3.md),
 | Sürüm | İçerik | Durum |
 | --- | --- | --- |
 | 2.3.0 | Yayınlanmamış 2.2 hattının (`archive/local-2.2.1`) bu ana hatta taşınması | Yayınlandı (v2.3.0) |
-| 2.4.0 | OpenRelax'ın içinde, yönetici gerektirmeyen Fotokapan (PDH örnekleyici, ölçülmüş kesme/DPC), eski SYSTEM görevinin kaldırılması, yol onarımı, ölçülmüş tüketim, `irm \| iex` kurulum, release zip + SHA256, Scoop | Kod ve yerel kabul tamamlandı; PR ve CI bekliyor |
+| 2.4.0 | OpenRelax'ın içinde, yönetici gerektirmeyen Fotokapan (PDH örnekleyici, ölçülmüş kesme/DPC), eski SYSTEM görevinin kaldırılması, yol onarımı, ölçülmüş tüketim, `irm \| iex` kurulum, release zip + SHA256, Scoop | Yayınlandı (v2.4.0) |
 | 2.5 | MCP sunucusu (`openrelax-mcp.ps1`), "AI asistanına bağla", uygulama içi "Neden yavaş?" özeti, MCP Registry ve awesome-list başvuruları | Planlandı |
 | Lansman | README/GIF/yazı, HN + Reddit + Türkçe topluluklar takvimi | 2.5 ile paralel hazırlanır |
 | 2.6+ | Temizlik genişletme ve sistem sağlığı sekmesi; öncelik lansman geri bildirimine göre | Planlandı |

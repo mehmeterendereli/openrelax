@@ -1,7 +1,10 @@
 ﻿# Pure settings, path guards and shared maintenance orchestration. Windows PowerShell 5.1.
 function Get-DefaultSettings {
+    # A first run speaks Turkish on a Turkish Windows display language, English otherwise.
+    $language = 'en'
+    if ([Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'tr') { $language = 'tr' }
     return @{
-        schemaVersion = 3; language = 'tr'; autoBoost = $false; autoBoostLimit = 85
+        schemaVersion = 3; language = $language; autoBoost = $false; autoBoostLimit = 85
         closeToTray = $true; runAtStartup = $false; weeklyClean = $false
         trimRam = $false; clearDns = $false
         trapNotify = $true; trapRecordCommandLines = $false; trapEnabled = $true

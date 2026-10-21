@@ -3,7 +3,8 @@
 [![Windows verification](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml/badge.svg)](https://github.com/mehmeterendereli/openrelax/actions/workflows/verify.yml)
 
 Portable, MIT-licensed Windows maintenance software written in PowerShell and
-Windows Forms. Source version **2.4.0** is in this repository; the latest
+Windows Forms. The source version is declared once, as `$script:AppVersion` in
+`openrelax.ps1`; the latest
 [GitHub source release](https://github.com/mehmeterendereli/openrelax/releases/latest)
 is listed on the releases page ([changelog](CHANGELOG.md)). Releases contain
 source only: no signed binary, stable binary distribution or published LTS
@@ -186,7 +187,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-all.ps1
 selection, Fotokapan recorder helpers and legacy-log migration, diagnosis,
 report and notification rules.
 
-CI parses every PowerShell source/test and all four worker scripts, runs
+CI parses every PowerShell source/test and all five worker scripts, runs
 deterministic safety contracts and starts real isolated SelfTest/AutoClean
 processes over small synthetic fixtures. It verifies refusal on corrupt
 settings, unchanged state during SelfTest and actual deletion/count/statistics.

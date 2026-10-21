@@ -1,4 +1,4 @@
-﻿# OpenRelax PC Care v2.4.0 - PowerShell WinForms system care utility
+﻿# OpenRelax PC Care - PowerShell WinForms system care utility
 # Modes: default = GUI | -AutoClean = headless scheduled cleanup | -SelfTest = read-only engine scan
 # Test hooks (env): OPENRELAX_SMOKETEST=1|<seconds> auto-close, OPENRELAX_STRESS=<cycles> GUI stress run,
 #                   OPENRELAX_TRAP_DIR=<folder> read Fotokapan data from a test folder
